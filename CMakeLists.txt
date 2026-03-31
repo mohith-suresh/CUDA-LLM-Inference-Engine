@@ -35,6 +35,7 @@ add_library(gemm_kernels
     kernels/gemm/01_naive.cu
     kernels/gemm/02_coalesced.cu
     kernels/gemm/03_shared_tiling.cu
+    kernels/gemm/04_reg_tiling_1d.cu
 )
 target_include_directories(gemm_kernels PUBLIC
     ${CMAKE_SOURCE_DIR}/include
