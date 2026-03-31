@@ -4,6 +4,7 @@
 #include "validator.cuh"
 #include "gemm/01_naive.cuh"
 #include "gemm/02_coalesced.cuh"
+#include "gemm/03_shared_tiling.cuh"
 
 typedef void (*GemmFn)(int, int, int, const float*, const float*, float*);
 
@@ -17,8 +18,9 @@ int main() {
     int num_sizes = 4;
 
     KernelInfo kernels[] = {
-        {"01 Naive",     run_sgemm_naive},
-        {"02 Coalesced", run_sgemm_coalesced},
+        {"01 Naive",          run_sgemm_naive},
+        {"02 Coalesced",      run_sgemm_coalesced},
+        {"03 Shared Tiling",  run_sgemm_shared_tiling},
     };
     int num_kernels = sizeof(kernels) / sizeof(kernels[0]);
 
