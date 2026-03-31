@@ -3,6 +3,7 @@
 #include "timer.cuh"
 #include "validator.cuh"
 #include "gemm/01_naive.cuh"
+#include "gemm/02_coalesced.cuh"
 
 typedef void (*GemmFn)(int, int, int, const float*, const float*, float*);
 
@@ -16,7 +17,8 @@ int main() {
     int num_sizes = 4;
 
     KernelInfo kernels[] = {
-        {"01 Naive", run_sgemm_naive},
+        {"01 Naive",     run_sgemm_naive},
+        {"02 Coalesced", run_sgemm_coalesced},
     };
     int num_kernels = sizeof(kernels) / sizeof(kernels[0]);
 

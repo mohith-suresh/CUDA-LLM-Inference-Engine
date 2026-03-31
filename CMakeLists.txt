@@ -33,6 +33,7 @@ include_directories(
 # --- GEMM Kernels (Week 1) ---
 add_library(gemm_kernels
     kernels/gemm/01_naive.cu
+    kernels/gemm/02_coalesced.cu
 )
 target_include_directories(gemm_kernels PUBLIC
     ${CMAKE_SOURCE_DIR}/include
