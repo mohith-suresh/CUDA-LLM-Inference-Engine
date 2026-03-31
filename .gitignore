@@ -1,0 +1,27 @@
+# Build
+build/
+cmake-build-*/
+
+# Compiled
+*.o
+*.so
+*.a
+*.exe
+
+# Profiling
+*.ncu-rep
+*.nsys-rep
+*.qdrep
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+.DS_Store
