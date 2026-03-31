@@ -29,3 +29,16 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/kernels
     ${CUBLAS_INCLUDE}
 )
+
+# --- GEMM Kernels (Week 1) ---
+add_library(gemm_kernels
+    kernels/gemm/01_naive.cu
+)
+target_include_directories(gemm_kernels PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/kernels
+)
+
+# GEMM Benchmark
+add_executable(gemm_bench benchmarks/gemm_bench.cu)
+target_link_libraries(gemm_bench gemm_kernels ${CUBLAS_LIB})
