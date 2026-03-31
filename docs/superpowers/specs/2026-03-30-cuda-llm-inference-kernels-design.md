@@ -120,7 +120,7 @@ SLICK/
 ## Weekly Milestones
 
 - **Week 1**: Kernels 1-3 + build system + timing/validation framework
-- **Week 2**: Kernels 4-7 + NCU profiling comparison
+- **Week 2**: Kernels 4-7 + analytical roofline analysis
 - **Week 3**: Kernels 8-9 (skip Tensor Core GEMM — no TC hardware)
 - **Week 4**: Kernel 10 (FlashAttention-2 forward + causal mask)
 - **Week 5**: Kernels 11-12 (PagedAttention + GQA + block allocator)

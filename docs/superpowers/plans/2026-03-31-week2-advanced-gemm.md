@@ -195,7 +195,21 @@ feat: add double buffered GEMM kernel
 
 ---
 
-### Task 5: Week 2 Milestone
+### Task 5: Roofline Analysis
+
+- [x] **Step 1: Add analytical roofline to gemm_bench.cu**
+
+Compute theoretical arithmetic intensity from tile dimensions, classify each kernel as
+memory-bound or compute-bound using GTX 1650 Ti roofline (3470 GFLOPS, 192 GB/s, ridge 18.1).
+
+- [x] **Step 2: Run and verify results**
+
+Note: NCU hardware profiling unavailable on WSL2 (GPU perf counters not exposed).
+Used analytical approach: theoretical AI + measured GFLOPS.
+
+---
+
+### Task 6: Week 2 Milestone
 
 - [x] **Step 1: Run full benchmark, verify all 7 kernels pass at all 4 sizes**
 
