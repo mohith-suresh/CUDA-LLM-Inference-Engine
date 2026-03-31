@@ -104,20 +104,20 @@ Week 2 builds four progressively optimized GEMM kernels (04-07) on top of Week 1
 
 ## Roofline Analysis
 
-GTX 1650 Ti: Peak FP32 = 3470 GFLOPS | Peak BW = 192 GB/s | Ridge = 18.1 FLOP/byte
+GTX 1650 Ti: Peak FP32 = 4300 GFLOPS (1024 cores @ 2100 MHz) | Peak BW = 192 GB/s | Ridge = 22.4 FLOP/byte
 
 | Kernel | AI (FLOP/byte) | GFLOPS | %Peak | Bound | Detail |
 |--------|---------------|--------|-------|-------|--------|
-| 01 Naive | 0.25 | 30 | 0.9% | MEMORY | 62% of mem ceiling |
-| 02 Coalesced | 0.25 | 351 | 10.1% | MEMORY | 731% of mem ceiling (L2 cache effects) |
-| 03 Shared Tiling | 8.0 | 469 | 13.5% | MEMORY | 31% of mem ceiling |
-| 04 1D Reg Tiling | 16.0 | 1094 | 31.5% | MEMORY | 36% of mem ceiling |
-| 05 2D Reg Tiling | 32.0 | 1210 | 34.9% | COMPUTE | 34.9% of compute ceiling |
-| 06 Vectorized | 32.0 | 1689 | 48.7% | COMPUTE | 48.7% of compute ceiling |
-| 07 Double Buffered | 32.0 | 1713 | 49.4% | COMPUTE | 49.4% of compute ceiling |
+| 01 Naive | 0.25 | 30 | 0.7% | MEMORY | 62% of mem ceiling |
+| 02 Coalesced | 0.25 | 351 | 8.2% | MEMORY | 731% of mem ceiling (L2 cache effects) |
+| 03 Shared Tiling | 8.0 | 470 | 10.9% | MEMORY | 31% of mem ceiling |
+| 04 1D Reg Tiling | 16.0 | 1090 | 25.4% | MEMORY | 35% of mem ceiling |
+| 05 2D Reg Tiling | 32.0 | 1208 | 28.1% | COMPUTE | 28.1% of compute ceiling |
+| 06 Vectorized | 32.0 | 1690 | 39.3% | COMPUTE | 39.3% of compute ceiling |
+| 07 Double Buffered | 32.0 | 1717 | 39.9% | COMPUTE | 39.9% of compute ceiling |
 
 Key observations:
-- Kernels 01-04 are memory-bound (AI < 18.1 ridge point)
+- Kernels 01-04 are memory-bound (AI < 22.4 ridge point)
 - Kernels 05-07 cross the ridge into compute-bound territory (AI = 32)
 - Kernel 06 vectorized loads gave the biggest single jump (+40%) by reducing instruction overhead
 - Kernel 07 double buffering adds ~2% — the GPU is already compute-saturated

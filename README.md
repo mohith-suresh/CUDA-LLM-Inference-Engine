@@ -27,7 +27,7 @@ cmake --build build
 | 06 | Vectorized | float4 loads + transposed A in smem | 1689 | 32.0 | Compute |
 | 07 | Double Buffered | 2× smem buffers, overlap load+compute | 1713 | 32.0 | Compute |
 
-Roofline: Peak FP32 = 3470 GFLOPS | Peak BW = 192 GB/s | Ridge = 18.1 FLOP/byte
+Roofline: Peak FP32 = 4300 GFLOPS (1024 cores @ 2100 MHz) | Peak BW = 192 GB/s | Ridge = 22.4 FLOP/byte
 
 ## Roadmap
 

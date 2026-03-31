@@ -95,10 +95,10 @@ int main() {
     // Roofline Analysis (analytical)
     // ==========================================
     // GTX 1650 Ti specs:
-    //   1024 CUDA cores @ 1695 MHz boost = 2 * 1024 * 1.695 = 3470 GFLOPS peak FP32
+    //   1024 CUDA cores @ 2100 MHz max = 2 * 1024 * 2.1 = 4300 GFLOPS peak FP32
     //   GDDR6 128-bit bus @ 12 Gbps = 192 GB/s peak DRAM bandwidth
-    //   Ridge point = 3470 / 192 = 18.1 FLOP/byte
-    const float peak_gflops = 3470.0f;
+    //   Ridge point = 4300 / 192 = 22.4 FLOP/byte
+    const float peak_gflops = 4300.0f;
     const float peak_bw = 192.0f;  // GB/s
     const float ridge = peak_gflops / peak_bw;
 
