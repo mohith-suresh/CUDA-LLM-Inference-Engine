@@ -93,14 +93,14 @@ Week 2 builds four progressively optimized GEMM kernels (04-07) on top of Week 1
 - All kernels validate against cuBLAS with tolerance: `K * 1.2e-7f`
 - Test sizes: 256, 512, 1024, 2048
 
-## Expected Performance (2048×2048)
+## Actual Performance (2048×2048)
 
-| Kernel | GFLOPS Target | Key Win |
-|--------|--------------|---------|
-| 04 1D Reg Tiling | 600-800 | Register reuse along M |
-| 05 2D Reg Tiling | 800-1100 | 2D reuse + 2× arith intensity |
-| 06 Vectorized | 1000-1200 | Fewer load instructions |
-| 07 Double Buffered | 1100-1400 | Latency hiding |
+| Kernel | GFLOPS | Key Win |
+|--------|--------|---------|
+| 04 1D Reg Tiling | ~1093 | Register reuse along M |
+| 05 2D Reg Tiling | ~1215 | 2D reuse + 2× arith intensity |
+| 06 Vectorized | ~1691 | Fewer load instructions + transposed A in smem |
+| 07 Double Buffered | ~1720 | Latency hiding (peak 1817 at 1024×1024) |
 
 ## File Structure
 

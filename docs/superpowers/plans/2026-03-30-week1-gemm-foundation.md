@@ -1,6 +1,6 @@
 # Week 1: GEMM Foundation — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Build the SLICK project scaffolding, CMake build system with cuBLAS, timing/validation utilities, and the first 3 GEMM kernels (naive → coalesced → shared memory tiling) with a benchmark runner.
 
@@ -36,7 +36,7 @@
 - Create: `CLAUDE.md`
 - Create: empty dirs `include/`, `kernels/gemm/`, `benchmarks/`, `tests/`, `scripts/`, `python/`
 
-- [ ] **Step 1: Create .gitignore**
+- [x] **Step 1: Create .gitignore**
 
 ```gitignore
 # Build
@@ -68,7 +68,7 @@ __pycache__/
 .DS_Store
 ```
 
-- [ ] **Step 2: Create CLAUDE.md**
+- [x] **Step 2: Create CLAUDE.md**
 
 ```markdown
 # SLICK — Speedy LLM Inference CUDA Kernels
@@ -95,7 +95,7 @@ GTX 1650 Ti, CC 7.5, 4GB VRAM, NO Tensor Cores, CUDA 10.1
 - Row-major storage for all matrices
 ```
 
-- [ ] **Step 3: Create directory structure**
+- [x] **Step 3: Create directory structure**
 
 ```bash
 cd /home/adithya/Document/SLICK
@@ -104,7 +104,7 @@ mkdir -p include kernels/gemm kernels/softmax kernels/flash_attention \
          benchmarks tests scripts python
 ```
 
-- [ ] **Step 4: Commit scaffolding**
+- [x] **Step 4: Commit scaffolding**
 
 ```bash
 git add .gitignore CLAUDE.md
@@ -120,7 +120,7 @@ git commit -m "feat: add project scaffolding and build instructions"
 - Create: `include/timer.cuh`
 - Create: `include/validator.cuh`
 
-- [ ] **Step 1: Create CMakeLists.txt**
+- [x] **Step 1: Create CMakeLists.txt**
 
 ```cmake
 cmake_minimum_required(VERSION 3.18)
@@ -157,7 +157,7 @@ include_directories(
 )
 ```
 
-- [ ] **Step 2: Create include/timer.cuh**
+- [x] **Step 2: Create include/timer.cuh**
 
 ```cpp
 #pragma once
@@ -228,7 +228,7 @@ inline float benchmark_gemm(GemmFn fn, int M, int N, int K,
 }
 ```
 
-- [ ] **Step 3: Create include/validator.cuh**
+- [x] **Step 3: Create include/validator.cuh**
 
 ```cpp
 #pragma once
@@ -310,7 +310,7 @@ inline void init_random_matrix(float* d_mat, int size, unsigned int seed = 42) {
 }
 ```
 
-- [ ] **Step 4: Build empty project to verify CMake + CUDA + cuBLAS**
+- [x] **Step 4: Build empty project to verify CMake + CUDA + cuBLAS**
 
 ```bash
 cd /home/adithya/Document/SLICK
@@ -319,7 +319,7 @@ cmake -B build -DCMAKE_CUDA_ARCHITECTURES=75 2>&1
 
 Expected: CMake configures successfully, finds cuBLAS, prints paths.
 
-- [ ] **Step 5: Commit build system and utilities**
+- [x] **Step 5: Commit build system and utilities**
 
 ```bash
 git add CMakeLists.txt include/timer.cuh include/validator.cuh
@@ -336,7 +336,7 @@ git commit -m "feat: add CMake build system and timing/validation utilities"
 - Create: `benchmarks/gemm_bench.cu`
 - Modify: `CMakeLists.txt` (add kernel + benchmark targets)
 
-- [ ] **Step 1: Create kernels/gemm/01_naive.cuh**
+- [x] **Step 1: Create kernels/gemm/01_naive.cuh**
 
 ```cpp
 #pragma once
@@ -347,7 +347,7 @@ void run_sgemm_naive(int M, int N, int K,
                      const float* A, const float* B, float* C);
 ```
 
-- [ ] **Step 2: Create kernels/gemm/01_naive.cu**
+- [x] **Step 2: Create kernels/gemm/01_naive.cu**
 
 ```cpp
 #include <cuda_runtime.h>
@@ -376,7 +376,7 @@ void run_sgemm_naive(int M, int N, int K,
 }
 ```
 
-- [ ] **Step 3: Create benchmarks/gemm_bench.cu (initial version with kernel 1 only)**
+- [x] **Step 3: Create benchmarks/gemm_bench.cu (initial version with kernel 1 only)**
 
 ```cpp
 #include <cstdio>
@@ -456,7 +456,7 @@ int main() {
 }
 ```
 
-- [ ] **Step 4: Update CMakeLists.txt — add kernel 01 and benchmark targets**
+- [x] **Step 4: Update CMakeLists.txt — add kernel 01 and benchmark targets**
 
 Append to `CMakeLists.txt`:
 
@@ -475,7 +475,7 @@ add_executable(gemm_bench benchmarks/gemm_bench.cu)
 target_link_libraries(gemm_bench gemm_kernels ${CUBLAS_LIB})
 ```
 
-- [ ] **Step 5: Build and run**
+- [x] **Step 5: Build and run**
 
 ```bash
 cd /home/adithya/Document/SLICK
@@ -486,7 +486,7 @@ cmake --build build
 
 Expected: All 4 sizes print PASS for kernel 01 with GFLOPS numbers.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add kernels/gemm/01_naive.cuh kernels/gemm/01_naive.cu \
@@ -504,7 +504,7 @@ git commit -m "feat: add naive GEMM kernel with cuBLAS validation"
 - Modify: `benchmarks/gemm_bench.cu` (add kernel 02)
 - Modify: `CMakeLists.txt` (add source)
 
-- [ ] **Step 1: Create kernels/gemm/02_coalesced.cuh**
+- [x] **Step 1: Create kernels/gemm/02_coalesced.cuh**
 
 ```cpp
 #pragma once
@@ -514,7 +514,7 @@ void run_sgemm_coalesced(int M, int N, int K,
                          const float* A, const float* B, float* C);
 ```
 
-- [ ] **Step 2: Create kernels/gemm/02_coalesced.cu**
+- [x] **Step 2: Create kernels/gemm/02_coalesced.cu**
 
 ```cpp
 #include <cuda_runtime.h>
@@ -543,7 +543,7 @@ void run_sgemm_coalesced(int M, int N, int K,
 }
 ```
 
-- [ ] **Step 3: Add kernel 02 to CMakeLists.txt**
+- [x] **Step 3: Add kernel 02 to CMakeLists.txt**
 
 Update the `gemm_kernels` library:
 
@@ -554,7 +554,7 @@ add_library(gemm_kernels
 )
 ```
 
-- [ ] **Step 4: Add kernel 02 to benchmarks/gemm_bench.cu**
+- [x] **Step 4: Add kernel 02 to benchmarks/gemm_bench.cu**
 
 Add include and array entry:
 
@@ -571,7 +571,7 @@ KernelInfo kernels[] = {
 };
 ```
 
-- [ ] **Step 5: Build and run**
+- [x] **Step 5: Build and run**
 
 ```bash
 cmake --build build
@@ -580,7 +580,7 @@ cmake --build build
 
 Expected: Both kernels PASS. Kernel 02 should show higher GFLOPS than 01.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add kernels/gemm/02_coalesced.cuh kernels/gemm/02_coalesced.cu \
@@ -598,7 +598,7 @@ git commit -m "feat: add coalesced GEMM kernel (threadIdx.x → col)"
 - Modify: `benchmarks/gemm_bench.cu` (add kernel 03)
 - Modify: `CMakeLists.txt` (add source)
 
-- [ ] **Step 1: Create kernels/gemm/03_shared_tiling.cuh**
+- [x] **Step 1: Create kernels/gemm/03_shared_tiling.cuh**
 
 ```cpp
 #pragma once
@@ -608,7 +608,7 @@ void run_sgemm_shared_tiling(int M, int N, int K,
                              const float* A, const float* B, float* C);
 ```
 
-- [ ] **Step 2: Create kernels/gemm/03_shared_tiling.cu**
+- [x] **Step 2: Create kernels/gemm/03_shared_tiling.cu**
 
 ```cpp
 #include <cuda_runtime.h>
@@ -661,7 +661,7 @@ void run_sgemm_shared_tiling(int M, int N, int K,
 }
 ```
 
-- [ ] **Step 3: Add kernel 03 to CMakeLists.txt**
+- [x] **Step 3: Add kernel 03 to CMakeLists.txt**
 
 Update the `gemm_kernels` library:
 
@@ -673,7 +673,7 @@ add_library(gemm_kernels
 )
 ```
 
-- [ ] **Step 4: Update benchmarks/gemm_bench.cu**
+- [x] **Step 4: Update benchmarks/gemm_bench.cu**
 
 Add include:
 
@@ -691,7 +691,7 @@ KernelInfo kernels[] = {
 };
 ```
 
-- [ ] **Step 5: Build and run**
+- [x] **Step 5: Build and run**
 
 ```bash
 cmake --build build
@@ -700,7 +700,7 @@ cmake --build build
 
 Expected: All 3 kernels PASS. Performance progression: 03 > 02 > 01 GFLOPS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add kernels/gemm/03_shared_tiling.cuh kernels/gemm/03_shared_tiling.cu \
@@ -715,7 +715,7 @@ git commit -m "feat: add shared memory tiling GEMM kernel (32x32 tiles)"
 **Files:**
 - Modify: `README.md` (update with build instructions and Week 1 results)
 
-- [ ] **Step 1: Run full benchmark and capture output**
+- [x] **Step 1: Run full benchmark and capture output**
 
 ```bash
 cd /home/adithya/Document/SLICK
@@ -725,7 +725,7 @@ cmake --build build
 
 Verify: All 12 tests pass (3 kernels × 4 sizes), GFLOPS progression is visible.
 
-- [ ] **Step 2: Update README.md with Week 1 status**
+- [x] **Step 2: Update README.md with Week 1 status**
 
 ```markdown
 # SLICK — Speedy LLM Inference CUDA Kernels
@@ -756,15 +756,15 @@ cmake --build build
 ## Roadmap
 
 - [x] Week 1: Naive → Coalesced → Shared Tiling GEMM
-- [ ] Week 2: Register tiling, vectorized loads, double buffering
-- [ ] Week 3: Fused softmax kernels
-- [ ] Week 4: FlashAttention-2
-- [ ] Week 5: PagedAttention + GQA
-- [ ] Week 6: Decode attention + INT8 GEMM
-- [ ] Week 7: GPT-2 inference demo
+- [x] Week 2: Register tiling, vectorized loads, double buffering
+- [x] Week 3: Fused softmax kernels
+- [x] Week 4: FlashAttention-2
+- [x] Week 5: PagedAttention + GQA
+- [x] Week 6: Decode attention + INT8 GEMM
+- [x] Week 7: GPT-2 inference demo
 ```
 
-- [ ] **Step 3: Milestone commit**
+- [x] **Step 3: Milestone commit**
 
 ```bash
 git add -A

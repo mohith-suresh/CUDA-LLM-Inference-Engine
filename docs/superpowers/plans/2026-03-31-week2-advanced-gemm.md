@@ -29,7 +29,7 @@
 
 **Files:** Create `04_reg_tiling_1d.cuh`, `04_reg_tiling_1d.cu`. Modify `CMakeLists.txt`, `benchmarks/gemm_bench.cu`.
 
-- [ ] **Step 1: Create kernels/gemm/04_reg_tiling_1d.cuh**
+- [x] **Step 1: Create kernels/gemm/04_reg_tiling_1d.cuh**
 
 ```cpp
 #pragma once
@@ -39,7 +39,7 @@ void run_sgemm_reg_tiling_1d(int M, int N, int K,
                              const float* A, const float* B, float* C);
 ```
 
-- [ ] **Step 2: Create kernels/gemm/04_reg_tiling_1d.cu**
+- [x] **Step 2: Create kernels/gemm/04_reg_tiling_1d.cu**
 
 Key implementation details:
 - Block tile: BM=64, BN=64, BK=8
@@ -49,11 +49,11 @@ Key implementation details:
 - Inner loop: for each k in BK, load Bs[k][col] once, multiply with As[row+tm][k] for tm in 0..7
 - Bounds checking on global loads and output writes
 
-- [ ] **Step 3: Update CMakeLists.txt** — add `kernels/gemm/04_reg_tiling_1d.cu` to `gemm_kernels`
+- [x] **Step 3: Update CMakeLists.txt** — add `kernels/gemm/04_reg_tiling_1d.cu` to `gemm_kernels`
 
-- [ ] **Step 4: Update benchmarks/gemm_bench.cu** — add include and kernel entry
+- [x] **Step 4: Update benchmarks/gemm_bench.cu** — add include and kernel entry
 
-- [ ] **Step 5: Build and validate**
+- [x] **Step 5: Build and validate**
 
 ```bash
 cmake -B build -DCMAKE_CUDA_ARCHITECTURES=75 && cmake --build build && ./build/gemm_bench
@@ -61,7 +61,7 @@ cmake -B build -DCMAKE_CUDA_ARCHITECTURES=75 && cmake --build build && ./build/g
 
 Expected: Kernel 04 PASS at all sizes, GFLOPS > kernel 03.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 feat: add 1D register tiling GEMM kernel
@@ -73,7 +73,7 @@ feat: add 1D register tiling GEMM kernel
 
 **Files:** Create `05_reg_tiling_2d.cuh`, `05_reg_tiling_2d.cu`. Modify `CMakeLists.txt`, `benchmarks/gemm_bench.cu`.
 
-- [ ] **Step 1: Create kernels/gemm/05_reg_tiling_2d.cuh**
+- [x] **Step 1: Create kernels/gemm/05_reg_tiling_2d.cuh**
 
 ```cpp
 #pragma once
@@ -83,7 +83,7 @@ void run_sgemm_reg_tiling_2d(int M, int N, int K,
                              const float* A, const float* B, float* C);
 ```
 
-- [ ] **Step 2: Create kernels/gemm/05_reg_tiling_2d.cu**
+- [x] **Step 2: Create kernels/gemm/05_reg_tiling_2d.cu**
 
 Key implementation details:
 - Block tile: BM=128, BN=128, BK=8
@@ -94,15 +94,15 @@ Key implementation details:
 - Inner loop: load A_reg[8] from As column, B_reg[8] from Bs row, outer product into 64 accumulators
 - Strided load pattern for coalescing: thread tid loads rows (tid*4/BK) to (tid*4/BK + 3)
 
-- [ ] **Step 3: Update CMakeLists.txt** — add source
+- [x] **Step 3: Update CMakeLists.txt** — add source
 
-- [ ] **Step 4: Update benchmark** — add include and entry
+- [x] **Step 4: Update benchmark** — add include and entry
 
-- [ ] **Step 5: Build and validate**
+- [x] **Step 5: Build and validate**
 
 Expected: GFLOPS > kernel 04, all sizes PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 feat: add 2D register tiling GEMM kernel
@@ -114,7 +114,7 @@ feat: add 2D register tiling GEMM kernel
 
 **Files:** Create `06_vectorized.cuh`, `06_vectorized.cu`. Modify `CMakeLists.txt`, `benchmarks/gemm_bench.cu`.
 
-- [ ] **Step 1: Create kernels/gemm/06_vectorized.cuh**
+- [x] **Step 1: Create kernels/gemm/06_vectorized.cuh**
 
 ```cpp
 #pragma once
@@ -124,7 +124,7 @@ void run_sgemm_vectorized(int M, int N, int K,
                           const float* A, const float* B, float* C);
 ```
 
-- [ ] **Step 2: Create kernels/gemm/06_vectorized.cu**
+- [x] **Step 2: Create kernels/gemm/06_vectorized.cu**
 
 Key implementation details:
 - Same tile dimensions as kernel 05 (BM=BN=128, BK=8, TM=TN=8)
@@ -134,15 +134,15 @@ Key implementation details:
 - For A: load float4 from A row, store scalars into As[row][k] (transposed store into shared)
 - Shared memory compute loop unchanged from kernel 05
 
-- [ ] **Step 3: Update CMakeLists.txt**
+- [x] **Step 3: Update CMakeLists.txt**
 
-- [ ] **Step 4: Update benchmark**
+- [x] **Step 4: Update benchmark**
 
-- [ ] **Step 5: Build and validate**
+- [x] **Step 5: Build and validate**
 
 Expected: GFLOPS >= kernel 05, fewer load stalls in profiler.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 feat: add vectorized GEMM kernel with float4 loads
@@ -154,7 +154,7 @@ feat: add vectorized GEMM kernel with float4 loads
 
 **Files:** Create `07_double_buffered.cuh`, `07_double_buffered.cu`. Modify `CMakeLists.txt`, `benchmarks/gemm_bench.cu`.
 
-- [ ] **Step 1: Create kernels/gemm/07_double_buffered.cuh**
+- [x] **Step 1: Create kernels/gemm/07_double_buffered.cuh**
 
 ```cpp
 #pragma once
@@ -164,7 +164,7 @@ void run_sgemm_double_buffered(int M, int N, int K,
                                const float* A, const float* B, float* C);
 ```
 
-- [ ] **Step 2: Create kernels/gemm/07_double_buffered.cu**
+- [x] **Step 2: Create kernels/gemm/07_double_buffered.cu**
 
 Key implementation details:
 - Same base as kernel 06 (BM=BN=128, BK=8, TM=TN=8, float4 loads)
@@ -179,15 +179,15 @@ Key implementation details:
   3. Compute final tile in buf[write_idx]
 - Single __syncthreads per iteration instead of two
 
-- [ ] **Step 3: Update CMakeLists.txt**
+- [x] **Step 3: Update CMakeLists.txt**
 
-- [ ] **Step 4: Update benchmark**
+- [x] **Step 4: Update benchmark**
 
-- [ ] **Step 5: Build and validate**
+- [x] **Step 5: Build and validate**
 
 Expected: Highest GFLOPS of all kernels, all sizes PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 feat: add double buffered GEMM kernel
@@ -197,12 +197,12 @@ feat: add double buffered GEMM kernel
 
 ### Task 5: Week 2 Milestone
 
-- [ ] **Step 1: Run full benchmark, verify all 7 kernels pass at all 4 sizes**
+- [x] **Step 1: Run full benchmark, verify all 7 kernels pass at all 4 sizes**
 
-- [ ] **Step 2: Milestone commit**
+- [x] **Step 2: Milestone commit**
 
 ```
 milestone: complete Week 2 advanced GEMM kernels
 ```
 
-- [ ] **Step 3: Update memory with Week 2 results**
+- [x] **Step 3: Update memory with Week 2 results**

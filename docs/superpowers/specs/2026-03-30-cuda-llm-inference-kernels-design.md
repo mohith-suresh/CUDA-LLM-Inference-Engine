@@ -29,8 +29,8 @@ SLICK/
 │   │   ├── 01_naive.cu
 │   │   ├── 02_coalesced.cu
 │   │   ├── 03_shared_tiling.cu
-│   │   ├── 04_1d_reg_tiling.cu
-│   │   ├── 05_2d_reg_tiling.cu
+│   │   ├── 04_reg_tiling_1d.cu
+│   │   ├── 05_reg_tiling_2d.cu
 │   │   ├── 06_vectorized.cu
 │   │   └── 07_double_buffered.cu
 │   ├── softmax/             # Week 3: Kernels 8-9
@@ -120,7 +120,7 @@ SLICK/
 ## Weekly Milestones
 
 - **Week 1**: Kernels 1-3 + build system + timing/validation framework
-- **Week 2**: Kernels 4-7 + NCU profiling comparison
+- **Week 2**: Kernels 4-7 (register tiling, vectorized loads, double buffering)
 - **Week 3**: Kernels 8-9 (skip Tensor Core GEMM — no TC hardware)
 - **Week 4**: Kernel 10 (FlashAttention-2 forward + causal mask)
 - **Week 5**: Kernels 11-12 (PagedAttention + GQA + block allocator)
