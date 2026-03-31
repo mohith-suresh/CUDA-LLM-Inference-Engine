@@ -7,6 +7,7 @@
 #include "gemm/03_shared_tiling.cuh"
 #include "gemm/04_reg_tiling_1d.cuh"
 #include "gemm/05_reg_tiling_2d.cuh"
+#include "gemm/06_vectorized.cuh"
 
 typedef void (*GemmFn)(int, int, int, const float*, const float*, float*);
 
@@ -25,6 +26,7 @@ int main() {
         {"03 Shared Tiling",  run_sgemm_shared_tiling},
         {"04 1D Reg Tiling",  run_sgemm_reg_tiling_1d},
         {"05 2D Reg Tiling",  run_sgemm_reg_tiling_2d},
+        {"06 Vectorized",      run_sgemm_vectorized},
     };
     int num_kernels = sizeof(kernels) / sizeof(kernels[0]);
 
