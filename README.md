@@ -12,7 +12,8 @@ cmake --build build
 ## Run
 
 ```bash
-./build/gemm_bench    # GEMM kernel benchmark
+./build/gemm_bench      # GEMM kernel benchmark
+./build/softmax_bench   # Softmax kernel benchmark
 ```
 
 ## GEMM Kernels
@@ -29,11 +30,20 @@ cmake --build build
 
 Roofline: Peak FP32 = 4300 GFLOPS (1024 cores @ 2100 MHz) | Peak BW = 192 GB/s | Ridge = 22.4 FLOP/byte
 
+## Softmax Kernels
+
+| # | Kernel | Technique | GB/s (512×1024) | GB/s (512×4096) |
+|---|--------|-----------|-----------------|-----------------|
+| 08 | Fused Online | Online algorithm, shared memory reduction | 114.0 | 113.7 |
+| 09 | Warp Reduce | Online algorithm, `__shfl_down_sync` reduction | 104.5 | 107.5 |
+
+Row-wise softmax using the online algorithm (Milakov & Gimelshein 2018): 2 passes over global memory instead of 3. Peak ~114 GB/s of 192 GB/s bandwidth ceiling (59%). The online `(max, sum_exp)` merge primitive feeds directly into FlashAttention (Week 4).
+
 ## Roadmap
 
 - [x] Week 1: Naive → Coalesced → Shared Tiling GEMM
 - [x] Week 2: Register tiling, vectorized loads, double buffering + roofline analysis
-- [ ] Week 3: Fused softmax kernels
+- [x] Week 3: Online softmax (fused + warp reduce)
 - [ ] Week 4: FlashAttention-2
 - [ ] Week 5: PagedAttention + GQA
 - [ ] Week 6: Decode attention + INT8 GEMM
