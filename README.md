@@ -32,12 +32,13 @@ Roofline: Peak FP32 = 4300 GFLOPS (1024 cores @ 2100 MHz) | Peak BW = 192 GB/s |
 
 ## Softmax Kernels
 
-| # | Kernel | Technique | GB/s (512×1024) | GB/s (512×4096) |
-|---|--------|-----------|-----------------|-----------------|
-| 08 | Fused Online | Online algorithm, shared memory reduction | 114.0 | 113.7 |
-| 09 | Warp Reduce | Online algorithm, `__shfl_down_sync` reduction | 104.5 | 107.5 |
+| # | Kernel | Technique | GB/s (512×1024) | GB/s (512×4096) | vs cuDNN |
+|---|--------|-----------|-----------------|-----------------|----------|
+| 08 | Fused Online | Online algorithm, shared memory reduction | 103.4 | 113.7 | **1.51×** |
+| 09 | Warp Reduce | Online algorithm, `__shfl_down_sync` reduction | 101.4 | 105.2 | **1.39×** |
+| — | cuDNN 8.9.7 | `cudnnSoftmaxForward` (reference) | 92.7 | 75.4 | 1.00× |
 
-Row-wise softmax using the online algorithm (Milakov & Gimelshein 2018): 2 passes over global memory instead of 3. Peak ~114 GB/s of 192 GB/s bandwidth ceiling (59%). The online `(max, sum_exp)` merge primitive feeds directly into FlashAttention (Week 4).
+Row-wise softmax using the online algorithm (Milakov & Gimelshein 2018): 2 passes over global memory instead of 3. Both kernels beat cuDNN on larger matrices — Kernel 08 reaches **1.51×** cuDNN throughput at 512×4096. Peak ~114 GB/s of 192 GB/s bandwidth ceiling (59%). The online `(max, sum_exp)` merge primitive feeds directly into FlashAttention (Week 4).
 
 ## Roadmap
 
