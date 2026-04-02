@@ -3,9 +3,47 @@
 #include <cmath>
 #include <cfloat>
 #include <cuda_runtime.h>
+#include <cudnn.h>
 #include "timer.cuh"
 #include "softmax/08_fused_online.cuh"
 #include "softmax/09_warp_reduce.cuh"
+
+#define CUDNN_CHECK(call) do {                                             \
+    cudnnStatus_t stat = call;                                             \
+    if (stat != CUDNN_STATUS_SUCCESS) {                                    \
+        fprintf(stderr, "cuDNN error in %s at line %d: %s\n",             \
+                __FILE__, __LINE__, cudnnGetErrorString(stat));            \
+        exit(EXIT_FAILURE);                                                \
+    }                                                                      \
+} while(0)
+
+struct CudnnSoftmax {
+    cudnnHandle_t handle;
+    cudnnTensorDescriptor_t desc;
+
+    CudnnSoftmax() {
+        CUDNN_CHECK(cudnnCreate(&handle));
+        CUDNN_CHECK(cudnnCreateTensorDescriptor(&desc));
+    }
+
+    ~CudnnSoftmax() {
+        cudnnDestroyTensorDescriptor(desc);
+        cudnnDestroy(handle);
+    }
+
+    void forward(const float* d_input, float* d_output, int N_rows, int N_cols) {
+        // NCHW: N=N_rows, C=N_cols, H=1, W=1 — softmax over C (channels)
+        CUDNN_CHECK(cudnnSetTensor4dDescriptor(desc, CUDNN_TENSOR_NCHW,
+                                                CUDNN_DATA_FLOAT,
+                                                N_rows, N_cols, 1, 1));
+        float alpha = 1.0f, beta = 0.0f;
+        CUDNN_CHECK(cudnnSoftmaxForward(handle,
+                                         CUDNN_SOFTMAX_ACCURATE,
+                                         CUDNN_SOFTMAX_MODE_CHANNEL,
+                                         &alpha, desc, d_input,
+                                         &beta, desc, d_output));
+    }
+};
 
 // CPU reference: numerically stable softmax (3-pass)
 void softmax_cpu_reference(const float* input, float* output,
@@ -94,6 +132,8 @@ int main() {
     const float peak_bw = 192.0f;  // GB/s
     const float tol = 1e-6f;
 
+    CudnnSoftmax cudnn_softmax;
+
     printf("SLICK Softmax Benchmark\n");
     printf("GPU: GTX 1650 Ti | CUDA 10.1 | FP32\n");
     printf("Peak Memory BW: %.0f GB/s\n", peak_bw);
@@ -144,6 +184,32 @@ int main() {
             printf("%-25s %10.2f %10.2f %8s %15.2e\n",
                    kernels[ki].name, gbps, time_us,
                    pass ? "PASS" : "FAIL", err);
+        }
+
+        // cuDNN reference benchmark
+        {
+            CUDA_CHECK(cudaMemset(d_output, 0, total * sizeof(float)));
+
+            // warmup
+            for (int i = 0; i < 3; ++i)
+                cudnn_softmax.forward(d_input, d_output, N_rows, N_cols);
+            CUDA_CHECK(cudaDeviceSynchronize());
+
+            GpuTimer timer;
+            timer.tic();
+            for (int i = 0; i < 10; ++i)
+                cudnn_softmax.forward(d_input, d_output, N_rows, N_cols);
+            float total_ms = timer.toc();
+            float avg_ms = total_ms / 10.0f;
+
+            float bytes = 2.0f * total * sizeof(float);
+            float gbps = bytes / (avg_ms * 1e6f);
+            float time_us = avg_ms * 1000.0f;
+
+            float err = softmax_max_error(d_output, h_ref, total);
+
+            printf("%-25s %10.2f %10.2f %8s %15.2e\n",
+                   "cuDNN", gbps, time_us, "REF", err);
         }
         printf("\n");
 

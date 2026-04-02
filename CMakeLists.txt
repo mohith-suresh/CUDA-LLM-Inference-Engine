@@ -20,8 +20,20 @@ if(NOT CUBLAS_LIB)
     message(FATAL_ERROR "cuBLAS library not found")
 endif()
 
+# Find cuDNN
+find_library(CUDNN_LIB cudnn
+    HINTS /usr/lib/x86_64-linux-gnu /usr/local/cuda/lib64)
+find_path(CUDNN_INCLUDE cudnn.h
+    HINTS /usr/include /usr/local/cuda/include)
+
+if(NOT CUDNN_LIB)
+    message(FATAL_ERROR "cuDNN library not found")
+endif()
+
 message(STATUS "cuBLAS library: ${CUBLAS_LIB}")
 message(STATUS "cuBLAS include: ${CUBLAS_INCLUDE}")
+message(STATUS "cuDNN library: ${CUDNN_LIB}")
+message(STATUS "cuDNN include: ${CUDNN_INCLUDE}")
 
 # Include directories
 include_directories(
@@ -61,4 +73,4 @@ target_include_directories(softmax_kernels PUBLIC
 
 # Softmax Benchmark
 add_executable(softmax_bench benchmarks/softmax_bench.cu)
-target_link_libraries(softmax_bench softmax_kernels)
+target_link_libraries(softmax_bench softmax_kernels ${CUDNN_LIB})
