@@ -83,6 +83,24 @@ int main() {
                    kernels[ki].name, gflops,
                    pass ? "PASS" : "FAIL", err);
         }
+
+        // Benchmark cuBLAS as reference
+        {
+            // warmup
+            for (int i = 0; i < 3; ++i)
+                validator.sgemm(M, N, K, d_A, d_B, d_C);
+            CUDA_CHECK(cudaDeviceSynchronize());
+
+            GpuTimer timer;
+            timer.tic();
+            for (int i = 0; i < 10; ++i)
+                validator.sgemm(M, N, K, d_A, d_B, d_C);
+            float total_ms = timer.toc();
+            float avg_ms = total_ms / 10.0f;
+            float gflops = compute_gflops(M, N, K, avg_ms);
+            printf("%-25s %10.2f %8s %15s\n",
+                   "cuBLAS", gflops, "REF", "—");
+        }
         printf("\n");
 
         CUDA_CHECK(cudaFree(d_A));
@@ -166,6 +184,35 @@ int main() {
 
             printf("%-20s %7.0f %6.1f%% %8.1f %10.1f %8.1f%%  %-9s %s\n",
                    kernels[ki].name, gflops, pct_peak, ai,
+                   achieved_bw, pct_bw, bound, details);
+        }
+
+        // cuBLAS roofline entry
+        {
+            CUDA_CHECK(cudaMemset(d_C, 0, size_C * sizeof(float)));
+
+            // warmup
+            for (int i = 0; i < 3; ++i)
+                validator.sgemm(M, N, K, d_A, d_B, d_C);
+            CUDA_CHECK(cudaDeviceSynchronize());
+
+            GpuTimer timer;
+            timer.tic();
+            for (int i = 0; i < 20; ++i)
+                validator.sgemm(M, N, K, d_A, d_B, d_C);
+            float total_ms = timer.toc();
+            float avg_ms = total_ms / 20.0f;
+            float gflops = compute_gflops(M, N, K, avg_ms);
+            float pct_peak = gflops / peak_gflops * 100.0f;
+            float achieved_bw = (float)(min_bytes / (avg_ms * 1e6));
+            float pct_bw = achieved_bw / peak_bw * 100.0f;
+
+            const char* bound = "COMPUTE";
+            char details[128];
+            snprintf(details, sizeof(details), "%.1f%% of compute ceiling", pct_peak);
+
+            printf("%-20s %7.0f %6.1f%% %8s %10.1f %8.1f%%  %-9s %s\n",
+                   "cuBLAS", gflops, pct_peak, "N/A",
                    achieved_bw, pct_bw, bound, details);
         }
 

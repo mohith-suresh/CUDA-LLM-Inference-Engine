@@ -13,6 +13,8 @@ Kernel 10 implements the FlashAttention-2 forward pass in FP32 for SM75 (GTX 165
 - Shared memory: 48KB per SM (configurable, up to 64KB)
 - Max registers per thread: 255
 
+Note: While the algorithm refers to HBM, the target TU117 architecture utilizes 4GB of GDDR6, which serves the same functional role in the memory hierarchy.
+
 ## Target Workload
 
 GPT-2 scale:
