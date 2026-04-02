@@ -48,3 +48,17 @@ target_include_directories(gemm_kernels PUBLIC
 # GEMM Benchmark
 add_executable(gemm_bench benchmarks/gemm_bench.cu)
 target_link_libraries(gemm_bench gemm_kernels ${CUBLAS_LIB})
+
+# --- Softmax Kernels (Week 3) ---
+add_library(softmax_kernels
+    kernels/softmax/08_fused_online.cu
+    kernels/softmax/09_warp_reduce.cu
+)
+target_include_directories(softmax_kernels PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/kernels
+)
+
+# Softmax Benchmark
+add_executable(softmax_bench benchmarks/softmax_bench.cu)
+target_link_libraries(softmax_bench softmax_kernels)
