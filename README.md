@@ -32,13 +32,17 @@ Roofline: Peak FP32 = 4300 GFLOPS (1024 cores @ 2100 MHz) | Peak BW = 192 GB/s |
 
 ## Softmax Kernels
 
-| # | Kernel | Technique | GB/s (512×1024) | GB/s (512×4096) | vs cuDNN |
-|---|--------|-----------|-----------------|-----------------|----------|
-| 08 | Fused Online | Online algorithm, shared memory reduction | 103.4 | 113.7 | **1.51×** |
-| 09 | Warp Reduce | Online algorithm, `__shfl_down_sync` reduction | 101.4 | 105.2 | **1.39×** |
-| — | cuDNN 8.9.7 | `cudnnSoftmaxForward` (reference) | 92.7 | 75.4 | 1.00× |
+| # | Kernel | Technique | GB/s (512×4096) | %BW | vs cuDNN |
+|---|--------|-----------|-----------------|-----|----------|
+| 08 | Fused Online | Online algorithm, shared memory reduction | 166.3 | 86.6% | **1.50×** |
+| 09 | Warp Reduce | Online algorithm, `__shfl_down_sync` reduction | 160.4 | 83.5% | **1.39×** |
+| — | cuDNN 8.9.7 | `cudnnSoftmaxForward` (reference) | 148.0 | 77.1% | 1.00× |
 
-Row-wise softmax using the online algorithm (Milakov & Gimelshein 2018): 2 passes over global memory instead of 3. Both kernels beat cuDNN on larger matrices — Kernel 08 reaches **1.51×** cuDNN throughput at 512×4096. Peak ~114 GB/s of 192 GB/s bandwidth ceiling (59%). The online `(max, sum_exp)` merge primitive feeds directly into FlashAttention (Week 4).
+Row-wise softmax using the online algorithm (Milakov & Gimelshein 2018). AI = 2.6 FLOP/byte — **deeply memory-bound** (8.7× below ridge point), so the only optimization lever is reducing DRAM traffic.
+
+**Why we beat cuDNN:** The online algorithm reads input **twice** (12 bytes/elem: accumulate pass + normalize pass), while cuDNN's 3-pass approach reads it **three times** (16 bytes/elem: find max, exp+sum, normalize). That 25% traffic reduction is the entire margin.
+
+The online `(max, sum_exp)` merge primitive feeds directly into FlashAttention (Week 4).
 
 ## Roadmap
 
