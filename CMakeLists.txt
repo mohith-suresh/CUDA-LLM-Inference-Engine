@@ -74,3 +74,16 @@ target_include_directories(softmax_kernels PUBLIC
 # Softmax Benchmark
 add_executable(softmax_bench benchmarks/softmax_bench.cu)
 target_link_libraries(softmax_bench softmax_kernels ${CUDNN_LIB})
+
+# --- Attention Kernels (Week 4) ---
+add_library(attention_kernels
+    kernels/flash_attention/10_flash_attn_v2.cu
+)
+target_include_directories(attention_kernels PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/kernels
+)
+
+# Attention Benchmark
+add_executable(attention_bench benchmarks/attention_bench.cu)
+target_link_libraries(attention_bench attention_kernels softmax_kernels ${CUBLAS_LIB})
