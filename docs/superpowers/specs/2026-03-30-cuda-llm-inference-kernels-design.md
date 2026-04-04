@@ -10,8 +10,8 @@ SLICK (Speedy LLM Inference CUDA Kernels) is a from-scratch CUDA kernel library 
 - **Compute Capability**: 7.5 (Turing)
 - **Tensor Cores**: NOT available (GTX 16xx series lacks Tensor Core hardware)
 - **dp4a (INT8)**: Available (CC 6.1+)
-- **CUDA Toolkit**: 10.1 (V10.1.243)
-- **cuBLAS**: 10.2 (reference validator)
+- **CUDA Toolkit**: 11.8 (V11.8.89)
+- **cuBLAS**: 11.x (reference validator)
 - **Max safe FP32 matrix**: 2048x2048 (48MB for 3 matrices)
 
 ## Project Structure

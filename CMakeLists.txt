@@ -2,13 +2,8 @@ cmake_minimum_required(VERSION 3.18)
 project(SLICK LANGUAGES CXX CUDA)
 
 set(CMAKE_CUDA_ARCHITECTURES 75)
-set(CMAKE_CUDA_STANDARD 14)
-set(CMAKE_CXX_STANDARD 14)
-
-# Fallback for older CUDA toolkits
-if(CMAKE_CUDA_COMPILER_VERSION VERSION_LESS "11.0")
-    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -arch=sm_75")
-endif()
+set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CXX_STANDARD 17)
 
 # Find cuBLAS
 find_library(CUBLAS_LIB cublas

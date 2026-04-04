@@ -1,7 +1,7 @@
 # SLICK — Speedy LLM Inference CUDA Kernels
 
 ## Build
-cmake -B build -DCMAKE_CUDA_ARCHITECTURES=75 && cmake --build build
+cmake -B build -DCMAKE_CUDA_COMPILER=/usr/local/cuda-11.8/bin/nvcc -DCMAKE_CUDA_ARCHITECTURES=75 && cmake --build build
 
 ## Run benchmarks
 ./build/gemm_bench
@@ -13,7 +13,7 @@ cmake -B build -DCMAKE_CUDA_ARCHITECTURES=75 && cmake --build build
 - tests/ — validation tests
 
 ## Hardware
-GTX 1650 Ti, CC 7.5, 4GB VRAM, NO Tensor Cores, CUDA 10.1
+GTX 1650 Ti, CC 7.5, 4GB VRAM, NO Tensor Cores, CUDA 11.8
 
 ## Conventions
 - Each kernel has a .cuh (declaration) and .cu (implementation)
