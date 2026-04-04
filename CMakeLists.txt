@@ -79,12 +79,36 @@ target_include_directories(attention_kernels PUBLIC
     ${CMAKE_SOURCE_DIR}/kernels
 )
 
-# Attention Benchmark
+# Attention Benchmark (with CUTLASS FMHA reference)
 add_executable(attention_bench benchmarks/attention_bench.cu)
+target_include_directories(attention_bench SYSTEM PRIVATE
+    ${CUTLASS_DIR}/include
+    ${CUTLASS_DIR}/tools/util/include
+    ${CUTLASS_DIR}/examples/41_fused_multi_head_attention
+)
+target_compile_options(attention_bench PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
+)
 target_link_libraries(attention_bench attention_kernels softmax_kernels ${CUBLAS_LIB})
 
-# --- Tests (Google Test) ---
+# --- Dependencies ---
 include(FetchContent)
+
+# CUTLASS (header-only)
+FetchContent_Declare(
+    cutlass
+    GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
+    GIT_TAG        v3.5.1
+    GIT_SHALLOW    TRUE
+)
+FetchContent_GetProperties(cutlass)
+if(NOT cutlass_POPULATED)
+    FetchContent_Populate(cutlass)
+endif()
+set(CUTLASS_DIR ${CUTLASS_DIR})
+message(STATUS "CUTLASS source: ${CUTLASS_DIR}")
+
+# --- Tests (Google Test) ---
 FetchContent_Declare(
     googletest
     GIT_REPOSITORY https://github.com/google/googletest.git

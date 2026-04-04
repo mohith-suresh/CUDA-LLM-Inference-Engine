@@ -23,5 +23,9 @@ __pycache__/
 *.pyc
 .venv/
 
+# Installers
+*.run
+*.deb
+
 # OS
 .DS_Store

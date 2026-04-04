@@ -8,6 +8,7 @@
 #include "timer.cuh"
 #include "flash_attention/10_flash_attn_v2.cuh"
 #include "softmax/08_fused_online.cuh"
+#include "cutlass_fmha_ref.cuh"
 
 #define CUBLAS_CHECK(call) do {                                        \
     cublasStatus_t stat = call;                                        \
@@ -217,7 +218,7 @@ int main() {
     UnfusedBaseline unfused;
 
     printf("SLICK FlashAttention-2 Benchmark\n");
-    printf("GPU: GTX 1650 Ti | CUDA 10.1 | FP32\n");
+    printf("GPU: GTX 1650 Ti | CUDA 11.8 | FP32\n");
     printf("Peak Memory BW: %.0f GB/s\n", peak_bw);
     printf("================================================\n\n");
 
@@ -271,18 +272,43 @@ int main() {
         printf("%-25s %10s %15.2e %8s\n", c.desc, "Unfused", err_unfused,
                pass_unfused ? "PASS" : "FAIL");
 
+        // CUTLASS FMHA (output is BMHK, needs transpose for comparison)
+        float *d_O_cutlass;
+        CUDA_CHECK(cudaMalloc(&d_O_cutlass, total_qkvo * sizeof(float)));
+        CUDA_CHECK(cudaMemset(d_O_cutlass, 0, total_qkvo * sizeof(float)));
+        run_cutlass_fmha(c.B, c.H, c.N, c.d, d_Q, d_K, d_V, d_O_cutlass, c.causal);
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        float* h_O_cutlass_bmhk = new float[total_qkvo];
+        float* h_O_cutlass_bhnk = new float[total_qkvo];
+        CUDA_CHECK(cudaMemcpy(h_O_cutlass_bmhk, d_O_cutlass,
+                              total_qkvo * sizeof(float), cudaMemcpyDeviceToHost));
+        transpose_bmhk_to_bhnk(h_O_cutlass_bmhk, h_O_cutlass_bhnk,
+                               c.B, c.H, c.N, c.d);
+        float max_err_cutlass = 0.0f;
+        for (int i = 0; i < total_qkvo; ++i) {
+            float err = fabsf(h_O_cutlass_bhnk[i] - h_O_ref[i]);
+            if (err > max_err_cutlass) max_err_cutlass = err;
+        }
+        bool pass_cutlass = max_err_cutlass < tol;
+        printf("%-25s %10s %15.2e %8s\n", c.desc, "CUTLASS", max_err_cutlass,
+               pass_cutlass ? "PASS" : "FAIL");
+        delete[] h_O_cutlass_bmhk;
+        delete[] h_O_cutlass_bhnk;
+
         delete[] h_Q; delete[] h_K; delete[] h_V; delete[] h_O_ref;
         CUDA_CHECK(cudaFree(d_Q)); CUDA_CHECK(cudaFree(d_K));
         CUDA_CHECK(cudaFree(d_V)); CUDA_CHECK(cudaFree(d_O));
         CUDA_CHECK(cudaFree(d_O_unfused));
+        CUDA_CHECK(cudaFree(d_O_cutlass));
     }
 
     // ======================== Benchmark ========================
     printf("\n--- Benchmark (causal, warmup=3, repeats=10) ---\n\n");
-    printf("%-15s %5s %5s %6s %5s  %10s %10s %10s %10s  %8s\n",
+    printf("%-15s %5s %5s %6s %5s  %10s %10s %10s %10s %10s  %8s\n",
            "Config", "B", "H", "N", "d",
-           "Flash(us)", "Unfsd(us)", "Speedup", "TFLOPS", "Eff BW");
-    printf("--------------------------------------------------------------------------------------------------\n");
+           "Flash(us)", "Unfsd(us)", "CUTLAS(us)", "Speedup", "TFLOPS", "Eff BW");
+    printf("-------------------------------------------------------------------------------------------------------------\n");
 
     for (int ci = 0; ci < num_bench; ++ci) {
         TestConfig& c = bench_configs[ci];
@@ -326,6 +352,20 @@ int main() {
         float unfused_ms = timer.toc() / 10.0f;
         float unfused_us = unfused_ms * 1000.0f;
 
+        // Benchmark CUTLASS FMHA
+        float *d_O_cut;
+        CUDA_CHECK(cudaMalloc(&d_O_cut, total_qkvo * sizeof(float)));
+        for (int w = 0; w < 3; ++w)
+            run_cutlass_fmha(c.B, c.H, c.N, c.d, d_Q, d_K, d_V, d_O_cut, c.causal);
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        timer.tic();
+        for (int r = 0; r < 10; ++r)
+            run_cutlass_fmha(c.B, c.H, c.N, c.d, d_Q, d_K, d_V, d_O_cut, c.causal);
+        float cutlass_ms = timer.toc() / 10.0f;
+        float cutlass_us = cutlass_ms * 1000.0f;
+        CUDA_CHECK(cudaFree(d_O_cut));
+
         // Metrics
         double total_flops = 4.0 * c.B * c.H * (double)c.N * c.N * c.d;
         float flash_tflops = (float)(total_flops / (flash_ms * 1e9));
@@ -335,9 +375,9 @@ int main() {
         double ideal_bytes = 4.0 * c.B * c.H * c.N * c.d * sizeof(float);
         float eff_bw = (float)(ideal_bytes / (flash_ms * 1e6));
 
-        printf("%-15s %5d %5d %6d %5d  %10.1f %10.1f %10.2fx %10.3f %7.1f GB/s\n",
+        printf("%-15s %5d %5d %6d %5d  %10.1f %10.1f %10.1f %10.2fx %10.3f %7.1f GB/s\n",
                c.desc, c.B, c.H, c.N, c.d,
-               flash_us, unfused_us, speedup, flash_tflops, eff_bw);
+               flash_us, unfused_us, cutlass_us, speedup, flash_tflops, eff_bw);
 
         CUDA_CHECK(cudaFree(d_Q)); CUDA_CHECK(cudaFree(d_K));
         CUDA_CHECK(cudaFree(d_V)); CUDA_CHECK(cudaFree(d_O));
