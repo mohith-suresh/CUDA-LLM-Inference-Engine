@@ -87,3 +87,27 @@ target_include_directories(attention_kernels PUBLIC
 # Attention Benchmark
 add_executable(attention_bench benchmarks/attention_bench.cu)
 target_link_libraries(attention_bench attention_kernels softmax_kernels ${CUBLAS_LIB})
+
+# --- Tests (Google Test) ---
+include(FetchContent)
+FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG        v1.14.0
+)
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
+enable_testing()
+
+add_executable(test_gemm tests/test_gemm.cu)
+target_link_libraries(test_gemm GTest::gtest_main gemm_kernels ${CUBLAS_LIB})
+add_test(NAME GemmTests COMMAND test_gemm)
+
+add_executable(test_softmax tests/test_softmax.cu)
+target_link_libraries(test_softmax GTest::gtest_main softmax_kernels)
+add_test(NAME SoftmaxTests COMMAND test_softmax)
+
+add_executable(test_attention tests/test_attention.cu)
+target_link_libraries(test_attention GTest::gtest_main attention_kernels)
+add_test(NAME AttentionTests COMMAND test_attention)
