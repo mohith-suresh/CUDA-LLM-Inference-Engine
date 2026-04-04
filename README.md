@@ -12,8 +12,17 @@ cmake --build build
 ## Run
 
 ```bash
-./build/gemm_bench      # GEMM kernel benchmark
-./build/softmax_bench   # Softmax kernel benchmark
+./build/gemm_bench        # GEMM kernel benchmark
+./build/softmax_bench     # Softmax kernel benchmark
+./build/attention_bench   # FlashAttention-2 benchmark
+```
+
+## Test
+
+```bash
+cmake -B build -DCMAKE_CUDA_ARCHITECTURES=75
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
 ## GEMM Kernels
@@ -44,12 +53,30 @@ Row-wise softmax using the online algorithm (Milakov & Gimelshein 2018). AI = 2.
 
 The online `(max, sum_exp)` merge primitive feeds directly into FlashAttention (Week 4).
 
+## FlashAttention-2
+
+| # | Kernel | Technique | Config | Time (μs) | TFLOPS | vs Unfused |
+|---|--------|-----------|--------|-----------|--------|------------|
+| 10 | FlashAttention-2 | Fused QK^T + softmax + PV, online rescaling | B1 H12 N1024 d64 | 2744 | 1.17 | **1.32×** |
+| 10 | FlashAttention-2 | Fused QK^T + softmax + PV, online rescaling | B4 H12 N512 d64 | 2047 | 1.57 | **1.96×** |
+| — | Unfused baseline | cuBLAS SGEMM + Kernel 08 softmax + cuBLAS SGEMM | B1 H12 N1024 d64 | 3623 | 0.89 | 1.00× |
+
+Single kernel fusing the entire multi-head attention: Q@K^T scoring, online softmax with warp shuffle reductions, and P@V output accumulation. The full N×N attention matrix never materializes in HBM — only a Br×Bc (64×32) tile exists transiently in shared memory/registers.
+
+**Key design choices:**
+- **Q-outer, KV-inner loop** with asymmetric tiling (Br=64, Bc=32) to balance Q reuse vs register pressure on SM75
+- **Half-warp shuffle reductions** for row-wise softmax — 16 lanes reduce with `__shfl_down_sync`, no shared memory needed for reductions
+- **Template causal mask** eliminates runtime branches; tile-level skip gives ~50% compute reduction
+- **Online softmax rescaling** using the same `(max, sum_exp)` merge primitive from Kernel 08
+
+Validation: max |error| < 2.4e-7 across all 6 test configs (B=1–2, N=128–1024, causal + non-causal).
+
 ## Roadmap
 
 - [x] Week 1: Naive → Coalesced → Shared Tiling GEMM
 - [x] Week 2: Register tiling, vectorized loads, double buffering + roofline analysis
 - [x] Week 3: Online softmax (fused + warp reduce)
-- [ ] Week 4: FlashAttention-2
+- [x] Week 4: FlashAttention-2
 - [ ] Week 5: PagedAttention + GQA
 - [ ] Week 6: Decode attention + INT8 GEMM
 - [ ] Week 7: GPT-2 inference demo
