@@ -140,3 +140,7 @@ add_test(NAME SoftmaxTests COMMAND test_softmax)
 add_executable(test_attention tests/test_attention.cu)
 target_link_libraries(test_attention GTest::gtest_main attention_kernels)
 add_test(NAME AttentionTests COMMAND test_attention)
+
+add_executable(test_paged_attention tests/test_paged_attention.cu)
+target_link_libraries(test_paged_attention GTest::gtest_main paged_attention_kernels attention_kernels)
+add_test(NAME PagedAttentionTests COMMAND test_paged_attention)
