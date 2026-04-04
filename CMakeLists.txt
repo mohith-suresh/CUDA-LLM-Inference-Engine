@@ -102,6 +102,10 @@ target_include_directories(paged_attention_kernels PUBLIC
     ${CMAKE_SOURCE_DIR}/kernels
 )
 
+# Paged Attention Benchmark
+add_executable(paged_attention_bench benchmarks/paged_attention_bench.cu)
+target_link_libraries(paged_attention_bench paged_attention_kernels attention_kernels ${CUBLAS_LIB})
+
 # --- Dependencies ---
 include(FetchContent)
 
