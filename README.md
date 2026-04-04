@@ -19,11 +19,19 @@ cmake --build build
 
 ## Test
 
+Google Test (v1.14.0, fetched via CMake FetchContent). 66 test cases across 3 suites:
+
 ```bash
-cmake -B build -DCMAKE_CUDA_ARCHITECTURES=75
-cmake --build build
 ctest --test-dir build --output-on-failure
 ```
+
+| Suite | Tests | Reference | Tolerance | Coverage |
+|-------|-------|-----------|-----------|----------|
+| `GemmTests` | 42 | cuBLAS | 1e-4 | 7 kernels × 3 square + 3 rect sizes |
+| `SoftmaxTests` | 14 | CPU 3-pass | 1e-6 | 2 kernels × 6 sizes + 2 edge cases |
+| `AttentionTests` | 10 | CPU O(N²) | 1e-5 | causal/non-causal × 4 configs + 2 special |
+
+Run a single suite: `./build/test_gemm`, `./build/test_softmax`, `./build/test_attention`
 
 ## GEMM Kernels
 
