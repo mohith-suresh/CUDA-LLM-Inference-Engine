@@ -73,6 +73,7 @@ target_link_libraries(softmax_bench softmax_kernels ${CUDNN_LIB})
 # --- Attention Kernels (Week 4) ---
 add_library(attention_kernels
     kernels/flash_attention/10_flash_attn_v2.cu
+    kernels/flash_attention/10b_flash_attn_v2_opt.cu
 )
 target_include_directories(attention_kernels PUBLIC
     ${CMAKE_SOURCE_DIR}/include
