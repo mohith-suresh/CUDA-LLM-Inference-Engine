@@ -52,8 +52,9 @@ SLICK/
 ├── tests/
 │   └── validate.cu
 ├── python/
-│   ├── bindings.cpp         # Week 7: pybind11 GPT-2 demo
-│   └── gpt2_inference.py
+│   ├── bindings.cpp         # Week 7: pybind11 bindings for all kernels
+│   ├── gpt2_inference.py    # Week 7: vanilla autoregressive inference
+│   └── speculative_decode.py # Week 7: speculative decoding orchestration
 └── scripts/
     └── plot_results.py
 ```
@@ -125,7 +126,53 @@ SLICK/
 - **Week 4**: Kernel 10 (FlashAttention-2 forward + causal mask)
 - **Week 5**: Kernels 11-12 (PagedAttention + GQA + block allocator)
 - **Week 6**: Kernels 13-14 (Decode attention + INT8 GEMM)
-- **Week 7**: GPT-2 inference demo + polish + benchmarks
+- **Week 7**: GPT-2 inference demo with speculative decoding + polish + benchmarks
+
+## Speculative Decoding (Week 7)
+
+### Overview
+Extend the GPT-2 inference demo to include speculative decoding, demonstrating 2-3x speedup over vanilla autoregressive generation using the project's own kernels.
+
+### Architecture
+- **Target model**: GPT-2 small (124M, 12 layers) — INT8 quantized (~124MB)
+- **Draft model**: GPT-2 tiny (2-4 layers, same vocab/embedding) — INT8 quantized (~30-60MB)
+- **Both models fit in 4GB VRAM** with room for KV caches and activations
+
+### Algorithm
+1. Draft model generates K candidate tokens autoregressively (K=4-8)
+2. Target model verifies all K tokens in a single forward pass (parallel)
+3. Accept tokens where draft matches target distribution (rejection sampling)
+4. On first rejection, sample from adjusted target distribution
+5. Repeat from the last accepted position
+
+### Kernel Usage
+| Step | Kernel(s) Used |
+|------|---------------|
+| Draft generation (token-by-token) | Decode Attention (K13), INT8 GEMM (K14), Softmax (K08) |
+| Target verification (batch) | FlashAttention (K10), INT8 GEMM (K14), Softmax (K08) |
+| Linear layers | INT8 GEMM (K14) or FP32 GEMM (K06/K07) |
+| KV cache management | PagedAttention (K11) |
+
+### Acceptance Sampling
+- Modified rejection sampling per Leviathan et al. (2023)
+- CPU-side logic: compare draft vs target token probabilities
+- Accept token i if: `r < P_target(x_i) / P_draft(x_i)` where r ~ Uniform(0,1)
+- On rejection: sample from `norm(max(0, P_target - P_draft))`
+- Guarantees output distribution identical to target model alone
+
+### Benchmarks
+- Metric: tokens/second (end-to-end wall clock)
+- Compare: vanilla autoregressive vs speculative decoding
+- Report: acceptance rate, average accepted tokens per step, speedup factor
+- Test prompts: varying lengths (32, 64, 128, 256 tokens)
+
+### Implementation Files
+```
+python/
+├── gpt2_inference.py       # Vanilla autoregressive + speculative decoding
+├── speculative_decode.py   # Speculative decoding orchestration logic
+└── bindings.cpp            # pybind11 bindings for all kernels
+```
 
 ## Constraints
 
