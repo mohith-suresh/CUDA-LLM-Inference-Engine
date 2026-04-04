@@ -92,6 +92,15 @@ target_compile_options(attention_bench PRIVATE
 )
 target_link_libraries(attention_bench attention_kernels softmax_kernels ${CUBLAS_LIB})
 
+# --- Paged Attention Kernels (Week 5) ---
+add_library(paged_attention_kernels
+    kernels/paged_attention/11_paged_attn.cu
+)
+target_include_directories(paged_attention_kernels PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/kernels
+)
+
 # --- Dependencies ---
 include(FetchContent)
 
