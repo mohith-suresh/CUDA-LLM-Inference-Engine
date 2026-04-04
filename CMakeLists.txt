@@ -95,6 +95,7 @@ target_link_libraries(attention_bench attention_kernels softmax_kernels ${CUBLAS
 # --- Paged Attention Kernels (Week 5) ---
 add_library(paged_attention_kernels
     kernels/paged_attention/11_paged_attn.cu
+    kernels/paged_attention/12_gqa.cu
 )
 target_include_directories(paged_attention_kernels PUBLIC
     ${CMAKE_SOURCE_DIR}/include
