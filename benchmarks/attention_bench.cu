@@ -8,6 +8,7 @@
 #include "timer.cuh"
 #include "flash_attention/10_flash_attn_v2.cuh"
 #include "softmax/08_fused_online.cuh"
+#include "flash_attention/10b_flash_attn_v2_opt.cuh"
 #include "cutlass_fmha_ref.cuh"
 
 #define CUBLAS_CHECK(call) do {                                        \
@@ -296,18 +297,30 @@ int main() {
         delete[] h_O_cutlass_bmhk;
         delete[] h_O_cutlass_bhnk;
 
+        // K10b optimized FlashAttention
+        float *d_O_opt;
+        CUDA_CHECK(cudaMalloc(&d_O_opt, total_qkvo * sizeof(float)));
+        CUDA_CHECK(cudaMemset(d_O_opt, 0, total_qkvo * sizeof(float)));
+        run_flash_attn_v2_opt(c.B, c.H, c.N, c.d, d_Q, d_K, d_V, d_O_opt, c.causal);
+        CUDA_CHECK(cudaDeviceSynchronize());
+        float err_opt = attention_max_error(d_O_opt, h_O_ref, total_qkvo);
+        bool pass_opt = err_opt < tol;
+        printf("%-25s %10s %15.2e %8s\n", c.desc, "K10b", err_opt,
+               pass_opt ? "PASS" : "FAIL");
+
         delete[] h_Q; delete[] h_K; delete[] h_V; delete[] h_O_ref;
         CUDA_CHECK(cudaFree(d_Q)); CUDA_CHECK(cudaFree(d_K));
         CUDA_CHECK(cudaFree(d_V)); CUDA_CHECK(cudaFree(d_O));
         CUDA_CHECK(cudaFree(d_O_unfused));
         CUDA_CHECK(cudaFree(d_O_cutlass));
+        CUDA_CHECK(cudaFree(d_O_opt));
     }
 
     // ======================== Benchmark ========================
     printf("\n--- Benchmark (causal, warmup=3, repeats=10) ---\n\n");
     printf("%-15s %5s %5s %6s %5s  %10s %10s %10s %10s %10s  %8s\n",
            "Config", "B", "H", "N", "d",
-           "Flash(us)", "Unfsd(us)", "CUTLAS(us)", "Speedup", "TFLOPS", "Eff BW");
+           "K10(us)", "K10b(us)", "Unfsd(us)", "CUTLAS(us)", "K10b/CUT", "Eff BW");
     printf("-------------------------------------------------------------------------------------------------------------\n");
 
     for (int ci = 0; ci < num_bench; ++ci) {
@@ -341,6 +354,17 @@ int main() {
         float flash_ms = timer.toc() / 10.0f;
         float flash_us = flash_ms * 1000.0f;
 
+        // Benchmark K10b optimized
+        for (int w = 0; w < 3; ++w)
+            run_flash_attn_v2_opt(c.B, c.H, c.N, c.d, d_Q, d_K, d_V, d_O, c.causal);
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        timer.tic();
+        for (int r = 0; r < 10; ++r)
+            run_flash_attn_v2_opt(c.B, c.H, c.N, c.d, d_Q, d_K, d_V, d_O, c.causal);
+        float opt_ms = timer.toc() / 10.0f;
+        float opt_us = opt_ms * 1000.0f;
+
         // Benchmark unfused baseline
         for (int w = 0; w < 3; ++w)
             unfused.run(c.B, c.H, c.N, c.d, d_Q, d_K, d_V, d_O, c.causal);
@@ -366,18 +390,14 @@ int main() {
         float cutlass_us = cutlass_ms * 1000.0f;
         CUDA_CHECK(cudaFree(d_O_cut));
 
-        // Metrics
-        double total_flops = 4.0 * c.B * c.H * (double)c.N * c.N * c.d;
-        float flash_tflops = (float)(total_flops / (flash_ms * 1e9));
-        float speedup = unfused_us / flash_us;
-
-        // Effective bandwidth: ideal IO = 4 * B*H*N*d * sizeof(float)
+        // Metrics (K10b vs CUTLASS ratio)
         double ideal_bytes = 4.0 * c.B * c.H * c.N * c.d * sizeof(float);
-        float eff_bw = (float)(ideal_bytes / (flash_ms * 1e6));
+        float eff_bw = (float)(ideal_bytes / (opt_ms * 1e6));
+        float ratio = opt_us / cutlass_us;
 
-        printf("%-15s %5d %5d %6d %5d  %10.1f %10.1f %10.1f %10.2fx %10.3f %7.1f GB/s\n",
+        printf("%-15s %5d %5d %6d %5d  %10.1f %10.1f %10.1f %10.1f %10.2fx %7.1f GB/s\n",
                c.desc, c.B, c.H, c.N, c.d,
-               flash_us, unfused_us, cutlass_us, speedup, flash_tflops, eff_bw);
+               flash_us, opt_us, unfused_us, cutlass_us, ratio, eff_bw);
 
         CUDA_CHECK(cudaFree(d_Q)); CUDA_CHECK(cudaFree(d_K));
         CUDA_CHECK(cudaFree(d_V)); CUDA_CHECK(cudaFree(d_O));
