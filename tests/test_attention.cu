@@ -5,6 +5,7 @@
 #include <cfloat>
 #include "timer.cuh"
 #include "flash_attention/10_flash_attn_v2.cuh"
+#include "flash_attention/10b_flash_attn_v2_opt.cuh"
 
 static void attention_cpu_reference(int B, int H, int N, int d,
                                     const float* Q, const float* K,
@@ -108,6 +109,25 @@ protected:
         EXPECT_LT(max_err, tol) << "Max error: " << max_err;
     }
 
+    void RunAndCheckOpt(bool causal, float tol = 1e-5f) {
+        attention_cpu_reference(B, H, N, d, h_Q, h_K, h_V, h_O_ref, causal);
+
+        CUDA_CHECK(cudaMemset(d_O, 0, total * sizeof(float)));
+        run_flash_attn_v2_opt(B, H, N, d, d_Q, d_K, d_V, d_O, causal);
+        CUDA_CHECK(cudaDeviceSynchronize());
+
+        float* h_O = new float[total];
+        CUDA_CHECK(cudaMemcpy(h_O, d_O, total * sizeof(float),
+                              cudaMemcpyDeviceToHost));
+        float max_err = 0.0f;
+        for (int i = 0; i < total; ++i) {
+            float err = fabsf(h_O[i] - h_O_ref[i]);
+            if (err > max_err) max_err = err;
+        }
+        delete[] h_O;
+        EXPECT_LT(max_err, tol) << "Max error: " << max_err;
+    }
+
     void TearDown() override {
         delete[] h_Q; delete[] h_K; delete[] h_V; delete[] h_O_ref;
         cudaFree(d_Q); cudaFree(d_K); cudaFree(d_V); cudaFree(d_O);
@@ -139,7 +159,38 @@ INSTANTIATE_TEST_SUITE_P(Configs, AttentionCausalTest, ::testing::Values(
     AttnParams{1, 12, 512, 64}
 ));
 
+// --- K10b optimized parameterized tests ---
+
+class AttentionOptTest : public AttentionTest,
+                         public ::testing::WithParamInterface<AttnParams> {
+protected:
+    void SetUp() override {
+        auto p = GetParam();
+        SetUpAttention(p.B, p.H, p.N, p.d);
+    }
+};
+
+TEST_P(AttentionOptTest, CausalOpt)    { RunAndCheckOpt(true); }
+TEST_P(AttentionOptTest, NonCausalOpt) { RunAndCheckOpt(false); }
+
+INSTANTIATE_TEST_SUITE_P(ConfigsOpt, AttentionOptTest, ::testing::Values(
+    AttnParams{1, 1,  128, 64},
+    AttnParams{1, 12, 128, 64},
+    AttnParams{1, 12, 256, 64},
+    AttnParams{1, 12, 512, 64}
+));
+
 // --- Multi-batch ---
+TEST_F(AttentionTest, MultiBatchCausalOpt) {
+    SetUpAttention(2, 12, 256, 64);
+    RunAndCheckOpt(true);
+}
+
+TEST_F(AttentionTest, FullGPT2CausalOpt) {
+    SetUpAttention(1, 12, 1024, 64);
+    RunAndCheckOpt(true);
+}
+
 TEST_F(AttentionTest, MultiBatchCausal) {
     SetUpAttention(2, 12, 256, 64);
     RunAndCheck(true);
