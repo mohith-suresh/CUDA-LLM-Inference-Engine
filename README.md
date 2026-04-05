@@ -16,11 +16,13 @@ cmake --build build
 ./build/softmax_bench           # Softmax kernel benchmark
 ./build/attention_bench         # FlashAttention-2 benchmark
 ./build/paged_attention_bench   # PagedAttention + GQA benchmark
+./build/decode_attention_bench  # Decode attention benchmark
+./build/int8_gemm_bench         # INT8 GEMM benchmark
 ```
 
 ## Test
 
-Google Test (v1.14.0, fetched via CMake FetchContent). 79 test cases across 4 suites:
+Google Test (v1.14.0, fetched via CMake FetchContent). 90 test cases across 6 suites:
 
 ```bash
 ctest --test-dir build --output-on-failure
@@ -32,8 +34,10 @@ ctest --test-dir build --output-on-failure
 | `SoftmaxTests` | 14 | CPU 3-pass | 1e-6 | 2 kernels × 6 sizes + 2 edge cases |
 | `AttentionTests` | 10 | CPU O(N²) | 1e-5 | causal/non-causal × 4 configs + 2 special |
 | `PagedAttentionTests` | 13 | K10 / CPU O(N²) | 1e-5 | K11: 6 configs (causal/non-causal, multi-batch) + K12 GQA: 7 configs (group 1/2/4/8) |
+| `DecodeAttentionTests` | 6 | K11 PagedAttn (N=1) | 1e-5 | K13: MHA 4 configs + GQA 2 configs (group 4) |
+| `Int8GemmTests` | 5 | K06 FP32 GEMM | 0.012√K | K14: 4 square sizes (256–2048) + 1 rectangular |
 
-Run a single suite: `./build/test_gemm`, `./build/test_softmax`, `./build/test_attention`, `./build/test_paged_attention`
+Run a single suite: `./build/test_gemm`, `./build/test_softmax`, `./build/test_attention`, `./build/test_paged_attention`, `./build/test_decode_attention`, `./build/test_int8_gemm`
 
 ## GEMM Kernels
 
@@ -117,6 +121,46 @@ Kernel 12 dispatches the same paged attention template with compile-time GROUP_S
 
 **GQA scaling:** GROUP_SIZE 1→8 gives ~5% latency reduction at fixed H_q=8 (from L2 cache reuse of shared KV blocks) while cutting KV memory by 8×. At H_q=32 N=512, the kernel reaches 1.43 TFLOPS (33% of peak FP32).
 
+## Decode Attention
+
+| # | Kernel | Config | K11 (μs) | K13 (μs) | Speedup |
+|---|--------|--------|----------|----------|---------|
+| 13 | Decode Attn | B1 H8 ctx128 d64 | 41.8 | 31.9 | **1.31×** |
+| 13 | Decode Attn | B1 H8 ctx256 d64 | 81.7 | 25.2 | **3.24×** |
+| 13 | Decode Attn | B1 H8 ctx512 d64 | 164.8 | 29.5 | **5.59×** |
+| 13 | Decode Attn | B1 H8 ctx1024 d64 | 316.4 | 51.8 | **6.11×** |
+| 13 | Decode Attn | B4 H8 ctx256 d64 | 179.9 | 49.0 | **3.67×** |
+| 13 | Decode Attn | B8 H8 ctx512 d64 | 706.8 | 162.6 | **4.35×** |
+| 13 | Decode Attn (GQA) | B1 H16/4 ctx256 d64 | 94.2 | 34.9 | **2.70×** |
+| 13 | Decode Attn (GQA) | B1 H32/8 ctx512 d64 | 340.9 | 81.5 | **4.18×** |
+
+Split-K decode attention optimized for single-token generation (N=1 query). The key insight: K11's tiled approach (Br=64) wastes 63/64 rows when N=1. K13 instead parallelizes across the KV sequence dimension, splitting it into chunks processed by independent threadblocks.
+
+**Two-pass architecture:**
+- **Pass 1:** Each threadblock computes partial attention over its KV chunk using online softmax. 8 warps within a block process KV tokens in parallel, each warp computing the full dot product across d=64 via lane-cooperative reduction. Outputs partial `(o, m, l)` per split to workspace.
+- **Pass 2:** Single threadblock per (batch, head) merges all splits using online softmax correction: `o_merged = o_a × e^(m_a − m_new) + o_b × e^(m_b − m_new)`, then normalizes by merged `l`.
+
+**Split heuristic:** `num_splits = clamp(num_kv_blocks / 4, 1, 16)` — scales parallelism with context length, explaining the growing speedup from 1.3× at ctx=128 to 6.1× at ctx=1024.
+
+## INT8 GEMM
+
+| # | Kernel | Size | K14 (μs) | FP32 cuBLAS (μs) | K14 GOPS | INT8/FP32 |
+|---|--------|------|----------|-------------------|----------|-----------|
+| 14 | INT8 dp4a | 256 | 23.7 | 31.8 | 1413 | **1.34×** |
+| 14 | INT8 dp4a | 512 | 93.2 | 212.8 | 2881 | **2.28×** |
+| 14 | INT8 dp4a | 1024 | 788.3 | 963.2 | 2724 | **1.22×** |
+| 14 | INT8 dp4a | 2048 | 5213.2 | 6619.3 | 3296 | **1.27×** |
+
+INT8 GEMM using `__dp4a()` (dot product of 4-element int8 vectors accumulated into int32), the Turing SM75 integer ALU path. Paired with a separate per-row symmetric quantization kernel.
+
+**NT layout rationale:** Both A `[M, K/4]` and B^T `[N, K/4]` stored row-major with K-dimension contiguous. This ensures coalesced global loads for both operands and natural alignment for dp4a's packed int8x4 format. The alternative (B in column-major) would require strided K-dimension access, breaking coalescing.
+
+**Quantization:** Per-row symmetric — `scale = max(|row|) / 127`. Phase 1: cooperative max-abs reduction via shared memory tree. Phase 2: quantize and pack 4 int8s into int32 for dp4a consumption. One block per row, separate kernel from GEMM.
+
+**Tiling:** BM=BN=64, BK=16 (int8 elements = 4 packed int32), TM=TN=4 register tile. Each thread accumulates a 4×4 block of int32 accumulators. Epilogue dequantizes: `C_fp32[i][j] = C_int32[i][j] × scale_A[i] × scale_B[j]`.
+
+**Note:** cuBLAS `cublasGemmEx` with `CUBLAS_COMPUTE_32I` is not supported on GTX 1650 Ti, so we compare against cuBLAS FP32 SGEMM. K14 achieves 1.2–2.3× speedup over FP32, reaching 3.3 TOPS peak INT8 throughput.
+
 ## Roadmap
 
 - [x] Week 1: Naive → Coalesced → Shared Tiling GEMM
@@ -124,5 +168,5 @@ Kernel 12 dispatches the same paged attention template with compile-time GROUP_S
 - [x] Week 3: Online softmax (fused + warp reduce)
 - [x] Week 4: FlashAttention-2
 - [x] Week 5: PagedAttention + GQA
-- [ ] Week 6: Decode attention + INT8 GEMM
+- [x] Week 6: Decode attention + INT8 GEMM
 - [ ] Week 7: GPT-2 inference demo
