@@ -68,12 +68,23 @@ void paged_attn_kernel(int N, int d, float scale,
     __shared__ float KV_smem[PA_BC][PA_HD + 1];   // 16 x 65
     __shared__ float P_smem[PA_BR][PA_BC + 1];    // 64 x 17
 
-    // Load Q tile [Br x d] into shared memory
-    for (int idx = tid; idx < PA_BR * PA_HD; idx += PA_NTHREADS) {
-        int r = idx / PA_HD;
-        int c = idx % PA_HD;
+    // Load Q tile [Br x d] into shared memory (float4 vectorized)
+    for (int idx = tid; idx < PA_BR * (PA_HD / 4); idx += PA_NTHREADS) {
+        int r = idx / (PA_HD / 4);
+        int c4 = idx % (PA_HD / 4);
         int gr = q_start + r;
-        Q_smem[r][c] = (gr < N) ? Q_bh[gr * d + c] : 0.0f;
+        if (gr < N) {
+            float4 val = *reinterpret_cast<const float4*>(&Q_bh[gr * d + c4 * 4]);
+            Q_smem[r][c4 * 4 + 0] = val.x;
+            Q_smem[r][c4 * 4 + 1] = val.y;
+            Q_smem[r][c4 * 4 + 2] = val.z;
+            Q_smem[r][c4 * 4 + 3] = val.w;
+        } else {
+            Q_smem[r][c4 * 4 + 0] = 0.0f;
+            Q_smem[r][c4 * 4 + 1] = 0.0f;
+            Q_smem[r][c4 * 4 + 2] = 0.0f;
+            Q_smem[r][c4 * 4 + 3] = 0.0f;
+        }
     }
 
     // Initialize O accumulator and softmax state
@@ -101,17 +112,24 @@ void paged_attn_kernel(int N, int d, float scale,
 
         int phys_block = bt[blk_idx];
 
-        // --- Load K from paged cache into KV_smem ---
+        // --- Load K from paged cache into KV_smem (float4) ---
         // k_cache layout: [num_phys_blocks][block_size][H_kv][d]
-        for (int idx = tid; idx < PA_BC * PA_HD; idx += PA_NTHREADS) {
-            int r = idx / PA_HD;   // token within block (0..15)
-            int c = idx % PA_HD;   // dim (0..63)
+        for (int idx = tid; idx < PA_BC * (PA_HD / 4); idx += PA_NTHREADS) {
+            int r = idx / (PA_HD / 4);
+            int c4 = idx % (PA_HD / 4);
             int seq_pos = kv_start + r;
             if (seq_pos < ctx_len && r < block_size) {
-                int cache_idx = ((phys_block * block_size + r) * H_kv + kv_head) * d + c;
-                KV_smem[r][c] = k_cache[cache_idx];
+                int cache_base = ((phys_block * block_size + r) * H_kv + kv_head) * d + c4 * 4;
+                float4 val = *reinterpret_cast<const float4*>(&k_cache[cache_base]);
+                KV_smem[r][c4 * 4 + 0] = val.x;
+                KV_smem[r][c4 * 4 + 1] = val.y;
+                KV_smem[r][c4 * 4 + 2] = val.z;
+                KV_smem[r][c4 * 4 + 3] = val.w;
             } else {
-                KV_smem[r][c] = 0.0f;
+                KV_smem[r][c4 * 4 + 0] = 0.0f;
+                KV_smem[r][c4 * 4 + 1] = 0.0f;
+                KV_smem[r][c4 * 4 + 2] = 0.0f;
+                KV_smem[r][c4 * 4 + 3] = 0.0f;
             }
         }
         __syncthreads();  // KV_smem (K) ready
@@ -216,16 +234,23 @@ void paged_attn_kernel(int N, int d, float scale,
                       [thread_col * PA_TN_S + tn] = S[tm][tn];
         __syncthreads();  // P_smem ready
 
-        // --- Load V from paged cache into KV_smem ---
-        for (int idx = tid; idx < PA_BC * PA_HD; idx += PA_NTHREADS) {
-            int r = idx / PA_HD;
-            int c = idx % PA_HD;
+        // --- Load V from paged cache into KV_smem (float4) ---
+        for (int idx = tid; idx < PA_BC * (PA_HD / 4); idx += PA_NTHREADS) {
+            int r = idx / (PA_HD / 4);
+            int c4 = idx % (PA_HD / 4);
             int seq_pos = kv_start + r;
             if (seq_pos < ctx_len && r < block_size) {
-                int cache_idx = ((phys_block * block_size + r) * H_kv + kv_head) * d + c;
-                KV_smem[r][c] = v_cache[cache_idx];
+                int cache_base = ((phys_block * block_size + r) * H_kv + kv_head) * d + c4 * 4;
+                float4 val = *reinterpret_cast<const float4*>(&v_cache[cache_base]);
+                KV_smem[r][c4 * 4 + 0] = val.x;
+                KV_smem[r][c4 * 4 + 1] = val.y;
+                KV_smem[r][c4 * 4 + 2] = val.z;
+                KV_smem[r][c4 * 4 + 3] = val.w;
             } else {
-                KV_smem[r][c] = 0.0f;
+                KV_smem[r][c4 * 4 + 0] = 0.0f;
+                KV_smem[r][c4 * 4 + 1] = 0.0f;
+                KV_smem[r][c4 * 4 + 2] = 0.0f;
+                KV_smem[r][c4 * 4 + 3] = 0.0f;
             }
         }
         __syncthreads();  // KV_smem (V) ready
@@ -250,17 +275,18 @@ void paged_attn_kernel(int N, int d, float scale,
 
     }  // end KV block loop
 
-    // --- Write O to HBM (finalize: O /= l) ---
+    // --- Write O to HBM (finalize: O /= l, float4 vectorized) ---
     #pragma unroll
     for (int tm = 0; tm < PA_TM_O; ++tm) {
         int gr = q_start + thread_row * PA_TM_O + tm;
         if (gr < N) {
             float inv_l = (l_i[tm] > 0.0f) ? 1.0f / l_i[tm] : 0.0f;
-            #pragma unroll
-            for (int tn = 0; tn < PA_TN_O; ++tn) {
-                int gc = thread_col * PA_TN_O + tn;
-                O_bh[gr * d + gc] = O_acc[tm][tn] * inv_l;
-            }
+            float4 out;
+            out.x = O_acc[tm][0] * inv_l;
+            out.y = O_acc[tm][1] * inv_l;
+            out.z = O_acc[tm][2] * inv_l;
+            out.w = O_acc[tm][3] * inv_l;
+            *reinterpret_cast<float4*>(&O_bh[gr * d + thread_col * PA_TN_O]) = out;
         }
     }
 }

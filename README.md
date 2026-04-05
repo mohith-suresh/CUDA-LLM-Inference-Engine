@@ -12,14 +12,15 @@ cmake --build build
 ## Run
 
 ```bash
-./build/gemm_bench        # GEMM kernel benchmark
-./build/softmax_bench     # Softmax kernel benchmark
-./build/attention_bench   # FlashAttention-2 benchmark
+./build/gemm_bench              # GEMM kernel benchmark
+./build/softmax_bench           # Softmax kernel benchmark
+./build/attention_bench         # FlashAttention-2 benchmark
+./build/paged_attention_bench   # PagedAttention + GQA benchmark
 ```
 
 ## Test
 
-Google Test (v1.14.0, fetched via CMake FetchContent). 66 test cases across 3 suites:
+Google Test (v1.14.0, fetched via CMake FetchContent). 79 test cases across 4 suites:
 
 ```bash
 ctest --test-dir build --output-on-failure
@@ -30,8 +31,9 @@ ctest --test-dir build --output-on-failure
 | `GemmTests` | 42 | cuBLAS | 1e-4 | 7 kernels × 3 square + 3 rect sizes |
 | `SoftmaxTests` | 14 | CPU 3-pass | 1e-6 | 2 kernels × 6 sizes + 2 edge cases |
 | `AttentionTests` | 10 | CPU O(N²) | 1e-5 | causal/non-causal × 4 configs + 2 special |
+| `PagedAttentionTests` | 13 | K10 / CPU O(N²) | 1e-5 | K11: 6 configs (causal/non-causal, multi-batch) + K12 GQA: 7 configs (group 1/2/4/8) |
 
-Run a single suite: `./build/test_gemm`, `./build/test_softmax`, `./build/test_attention`
+Run a single suite: `./build/test_gemm`, `./build/test_softmax`, `./build/test_attention`, `./build/test_paged_attention`
 
 ## GEMM Kernels
 
@@ -79,12 +81,48 @@ Single kernel fusing the entire multi-head attention: Q@K^T scoring, online soft
 
 Validation: max |error| < 2.4e-7 across all 6 test configs (B=1–2, N=128–1024, causal + non-causal).
 
+## PagedAttention
+
+| # | Kernel | Config | K10 (μs) | K11 (μs) | vs K10 | TFLOPS |
+|---|--------|--------|----------|----------|--------|--------|
+| 11 | PagedAttention | B1 H8 N128 d64 | 54.7 | 49.6 | **1.10×** | 0.68 |
+| 11 | PagedAttention | B1 H8 N256 d64 | 175.1 | 137.1 | **1.28×** | 0.98 |
+| 11 | PagedAttention | B1 H12 N256 d64 | 226.5 | 215.1 | **1.05×** | 0.94 |
+| 11 | PagedAttention | B1 H12 N512 d64 | 774.6 | 649.8 | **1.19×** | 1.24 |
+| 11 | PagedAttention | B2 H8 N256 d64 | 215.2 | 253.7 | 0.85× | 1.06 |
+
+Single kernel implementing vLLM-style paged KV cache with block table indirection (block_size=16). Reuses the same fused Q@K^T + online softmax + P@V pipeline from FlashAttention (Kernel 10), with KV fetched from non-contiguous physical blocks via a per-sequence block table.
+
+**Key design choices:**
+- **Unified template kernel** for both MHA (K11, GROUP_SIZE=1) and GQA (K12, GROUP_SIZE>1) — `kv_head = q_head / GROUP_SIZE`
+- **Asymmetric tiling** Br=64, Bc=16 (=block_size): each inner-loop step processes exactly one physical page, avoiding cross-block scatter
+- **float4 vectorized loads** for Q, K, V cache and O output — 4× fewer global memory transactions
+- **Half-warp shuffle softmax** (16 lanes) matches the Bc=16 tile width — no shared memory needed for reductions
+- **Online rescaling** with the same `(max, sum_exp)` merge primitive from Kernels 08/10
+
+K11 is 5–28% faster than K10 for single-batch configs (Bc=16 yields finer causal skip granularity + float4 vectorized paged cache loads), but shows 15% regression at B=2 due to block table indirection pressure with more grid blocks.
+
+## GQA (Grouped-Query Attention)
+
+| # | Kernel | H_q | H_kv | Group | N | Time (μs) | TFLOPS | KV Savings |
+|---|--------|-----|------|-------|---|-----------|--------|------------|
+| 12 | GQA PagedAttn | 8 | 8 | 1 | 256 | 131.3 | 1.02 | 1× |
+| 12 | GQA PagedAttn | 8 | 4 | 2 | 256 | 133.2 | 1.01 | 2× |
+| 12 | GQA PagedAttn | 8 | 2 | 4 | 256 | 128.4 | 1.05 | 4× |
+| 12 | GQA PagedAttn | 8 | 1 | 8 | 256 | 129.9 | 1.03 | 8× |
+| 12 | GQA PagedAttn | 32 | 4 | 8 | 256 | 429.7 | 1.25 | 8× |
+| 12 | GQA PagedAttn | 32 | 4 | 8 | 512 | 1498.5 | 1.43 | 8× |
+
+Kernel 12 dispatches the same paged attention template with compile-time GROUP_SIZE={1,2,4,8}. Multiple Q heads index the same KV head via `kv_head = q_head / GROUP_SIZE`, reducing KV cache memory proportionally while maintaining identical compute per Q head.
+
+**GQA scaling:** GROUP_SIZE 1→8 gives ~5% latency reduction at fixed H_q=8 (from L2 cache reuse of shared KV blocks) while cutting KV memory by 8×. At H_q=32 N=512, the kernel reaches 1.43 TFLOPS (33% of peak FP32).
+
 ## Roadmap
 
 - [x] Week 1: Naive → Coalesced → Shared Tiling GEMM
 - [x] Week 2: Register tiling, vectorized loads, double buffering + roofline analysis
 - [x] Week 3: Online softmax (fused + warp reduce)
 - [x] Week 4: FlashAttention-2
-- [ ] Week 5: PagedAttention + GQA
+- [x] Week 5: PagedAttention + GQA
 - [ ] Week 6: Decode attention + INT8 GEMM
 - [ ] Week 7: GPT-2 inference demo
