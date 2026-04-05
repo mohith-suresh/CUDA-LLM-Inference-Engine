@@ -12,7 +12,9 @@
 
 class Int8GemmTest : public ::testing::Test {
 protected:
-    void RunInt8vsFloat(int M, int N, int K, float tol = 0.05f) {
+    void RunInt8vsFloat(int M, int N, int K, float tol = -1.0f) {
+        // INT8 quantization error scales with sqrt(K)
+        if (tol < 0.0f) tol = 0.012f * sqrtf((float)K);
         int sizeA = M * K;
         int sizeB = K * N;
         int sizeC = M * N;
