@@ -97,16 +97,16 @@ protected:
         CUDA_CHECK(cudaMemcpy(d_block_table, h_block_table.data(), B * blocks_per_seq * sizeof(int), cudaMemcpyHostToDevice));
         CUDA_CHECK(cudaMemcpy(d_context_lens, h_context_lens.data(), B * sizeof(int), cudaMemcpyHostToDevice));
 
-        // K11 reference with N=1
+        // K11 reference with N=1, non-causal (decode attends to all KV tokens)
         CUDA_CHECK(cudaMemset(d_O_k11, 0, q_size * sizeof(float)));
         if (H_q == H_kv) {
             run_paged_attn(B, H_q, 1, d, d_Q, d_k_cache, d_v_cache,
                            d_block_table, d_context_lens,
-                           ctx_len, block_size, blocks_per_seq, d_O_k11, true);
+                           ctx_len, block_size, blocks_per_seq, d_O_k11, false);
         } else {
             run_gqa_paged_attn(B, H_q, H_kv, 1, d, d_Q, d_k_cache, d_v_cache,
                                d_block_table, d_context_lens,
-                               ctx_len, block_size, blocks_per_seq, d_O_k11, true);
+                               ctx_len, block_size, blocks_per_seq, d_O_k11, false);
         }
         CUDA_CHECK(cudaDeviceSynchronize());
 

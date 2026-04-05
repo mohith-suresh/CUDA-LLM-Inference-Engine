@@ -188,56 +188,6 @@ void decode_attn_partial_kernel(
     }
 }
 
-// ============================================================
-// Pass 2: Reduction kernel
-// Merges partial results from all splits using online softmax correction.
-// Grid: (B * H_q), one block per (batch, head) pair
-// ============================================================
-__global__ __launch_bounds__(DA_NTHREADS)
-void decode_attn_reduce_kernel(
-    int d, int H_q, int num_splits,
-    const float* __restrict__ workspace,   // [B, H_q, num_splits, d+2]
-    float* __restrict__ O)                 // [B, H_q, 1, d]
-{
-    const int bh = blockIdx.x;             // flattened (batch, head)
-    const int batch = bh / H_q;
-    const int head  = bh % H_q;
-    const int tid = threadIdx.x;
-
-    if (tid >= d) return;  // only first d threads do work
-
-    const int stride = d + 2;
-    int ws_base = (static_cast<long long>(batch) * H_q + head) * num_splits * stride;
-
-    // Read first split
-    float m_acc = workspace[ws_base + d];
-    float l_acc = workspace[ws_base + d + 1];
-    float o_acc = workspace[ws_base + tid];
-
-    // Merge remaining splits
-    for (int s = 1; s < num_splits; ++s) {
-        int offset = ws_base + s * stride;
-        float m_s = workspace[offset + d];
-        float l_s = workspace[offset + d + 1];
-        float o_s = workspace[offset + tid];
-
-        if (l_s == 0.0f) continue;  // empty split
-
-        float m_new = fmaxf(m_acc, m_s);
-        float alpha = __expf(m_acc - m_new);
-        float beta  = __expf(m_s - m_new);
-
-        o_acc = o_acc * alpha + o_s * beta;
-        l_acc = l_acc * alpha + l_s * beta;
-        m_acc = m_new;
-    }
-
-    // Finalize: normalize by l
-    float inv_l = (l_acc > 0.0f) ? 1.0f / l_acc : 0.0f;
-    int o_offset = (static_cast<long long>(batch) * H_q + head) * d;
-    O[o_offset + tid] = o_acc * inv_l;
-}
-
 // Host wrapper declaration
 void run_decode_attn(int B, int H_q, int H_kv, int d,
                      const float* Q,
