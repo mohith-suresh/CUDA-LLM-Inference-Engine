@@ -106,6 +106,32 @@ target_include_directories(paged_attention_kernels PUBLIC
 add_executable(paged_attention_bench benchmarks/paged_attention_bench.cu)
 target_link_libraries(paged_attention_bench paged_attention_kernels attention_kernels ${CUBLAS_LIB})
 
+# --- Decode Attention Kernels (Week 6) ---
+add_library(decode_kernels
+    kernels/decode/13_decode_attn.cu
+)
+target_include_directories(decode_kernels PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/kernels
+)
+
+# Decode Attention Benchmark
+add_executable(decode_attention_bench benchmarks/decode_attention_bench.cu)
+target_link_libraries(decode_attention_bench decode_kernels paged_attention_kernels attention_kernels ${CUBLAS_LIB})
+
+# --- Quantization Kernels (Week 6) ---
+add_library(quant_kernels
+    kernels/quantization/14_int8_gemm.cu
+)
+target_include_directories(quant_kernels PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/kernels
+)
+
+# INT8 GEMM Benchmark
+add_executable(int8_gemm_bench benchmarks/int8_gemm_bench.cu)
+target_link_libraries(int8_gemm_bench quant_kernels ${CUBLAS_LIB})
+
 # --- Dependencies ---
 include(FetchContent)
 
@@ -149,3 +175,11 @@ add_test(NAME AttentionTests COMMAND test_attention)
 add_executable(test_paged_attention tests/test_paged_attention.cu)
 target_link_libraries(test_paged_attention GTest::gtest_main paged_attention_kernels attention_kernels)
 add_test(NAME PagedAttentionTests COMMAND test_paged_attention)
+
+add_executable(test_decode_attention tests/test_decode_attention.cu)
+target_link_libraries(test_decode_attention GTest::gtest_main decode_kernels paged_attention_kernels attention_kernels)
+add_test(NAME DecodeAttentionTests COMMAND test_decode_attention)
+
+add_executable(test_int8_gemm tests/test_int8_gemm.cu)
+target_link_libraries(test_int8_gemm GTest::gtest_main quant_kernels gemm_kernels ${CUBLAS_LIB})
+add_test(NAME Int8GemmTests COMMAND test_int8_gemm)
