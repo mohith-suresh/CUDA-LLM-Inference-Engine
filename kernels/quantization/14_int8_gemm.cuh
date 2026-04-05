@@ -3,6 +3,7 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 #include <cmath>
+#include <cfloat>
 
 // ============================================================
 // INT8 GEMM constants
