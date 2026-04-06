@@ -45,6 +45,12 @@ tests/
   test_int8_epilogues.cu      # NEW: K14 epilogue tests
   test_engine.cu              # NEW: end-to-end greedy decode validation
 
+python/
+  benchmark_pytorch.py         # NEW: PyTorch FP32 baseline benchmark
+
+scripts/
+  demo_compare.sh              # NEW: runs all 3 backends, formats comparison table
+
 CMakeLists.txt                # MODIFIED: FTXUI dep, new targets
 ```
 
@@ -2726,9 +2732,724 @@ git add tests/test_engine.cu CMakeLists.txt
 git commit -m "test: add GPT-2 engine integration tests"
 ```
 
+- [ ] **Step 5: Commit**
+
+```bash
+git add README.md
+git commit -m "docs: mark Week 7 complete in roadmap"
+```
+
+---
+
+### Task 12: FP32 Weight Export & cuBLAS Backend
+
+**Files:**
+- Modify: `python/export_gpt2.py` (add FP32 export)
+- Modify: `include/gpt2_types.cuh` (add FP32 weight struct + backend enum)
+- Modify: `src/gpt2_engine.cuh` (add backend parameter)
+- Modify: `src/gpt2_engine.cu` (add cuBLAS FP32 forward path)
+
+The cuBLAS backend reuses the same engine, attention kernels, KV cache, TUI — only the linear projections change from K14 INT8 GEMM to cuBLAS FP32 SGEMM.
+
+- [ ] **Step 1: Update export script to also save FP32 weights**
+
+In `python/export_gpt2.py`, add FP32 export alongside INT8. After each INT8 quantized weight is saved, also save the raw FP32 weight matrix in the layout cuBLAS needs.
+
+Add this function:
+
+```python
+def save_fp32_weight(layer_dir: str, name: str, weight_fp32: np.ndarray):
+    """Save FP32 weight in [K, N] row-major layout for cuBLAS.
+    
+    cuBLAS computes y = x @ W where x is [M, K] and W is [K, N].
+    We store W as-is (row-major [K, N]).
+    """
+    save_bin(os.path.join(layer_dir, f"{name}_weight_fp32.bin"), weight_fp32.astype(np.float32))
+```
+
+Add these calls inside the per-layer loop, right after each INT8 export:
+
+```python
+        # QKV: W is [768, 2304] — save as-is for cuBLAS
+        save_fp32_weight(layer_dir, "qkv", qkv_w)
+
+        # Output proj: [768, 768]
+        save_fp32_weight(layer_dir, "out", out_w)
+
+        # FFN up: [768, 3072]
+        save_fp32_weight(layer_dir, "ffn_up", up_w)
+
+        # FFN down: [3072, 768]
+        save_fp32_weight(layer_dir, "ffn_down", down_w)
+```
+
+Re-run the export:
+
+```bash
+uv run python python/export_gpt2.py --output models/gpt2-int8
+```
+
+Expected: Each layer directory now has `*_weight_fp32.bin` files alongside the INT8 packed files. Total size increases from ~140MB to ~620MB.
+
+- [ ] **Step 2: Add backend enum and FP32 weight struct to types**
+
+In `include/gpt2_types.cuh`, add:
+
+```cpp
+enum class InferenceBackend { SLICK_INT8, CUBLAS_FP32 };
+
+// FP32 weight matrix for cuBLAS path
+struct FP32Weight {
+    float* data;    // [K, N] row-major
+    float* bias;    // [N]
+    int K;          // input dim
+    int N;          // output dim
+};
+
+// Extended per-layer weights (add FP32 variants)
+struct LayerWeightsFP32 {
+    FP32Weight qkv;       // [768, 2304]
+    FP32Weight out;       // [768, 768]
+    FP32Weight ffn_up;    // [768, 3072]
+    FP32Weight ffn_down;  // [3072, 768]
+};
+```
+
+And add to `GPT2Weights`:
+
+```cpp
+struct GPT2Weights {
+    // ... existing fields ...
+    LayerWeightsFP32 layers_fp32[12];  // FP32 weights for cuBLAS backend
+};
+```
+
+- [ ] **Step 3: Add backend to engine and implement cuBLAS FP32 linear**
+
+In `src/gpt2_engine.cuh`, add to the constructor and class:
+
+```cpp
+class GPT2Engine {
+public:
+    GPT2Engine(const std::string& model_dir, InferenceBackend backend = InferenceBackend::SLICK_INT8);
+    // ... rest unchanged ...
+
+private:
+    InferenceBackend backend_;
+    cublasHandle_t cublas_handle_;  // for FP32 backend
+
+    void load_weights_fp32();
+    void forward_layer_cublas(int layer, int seq_len, bool is_prefill);
+};
+```
+
+In `src/gpt2_engine.cu`, add FP32 weight loading:
+
+```cpp
+static float* load_bin_f32_raw(const std::string& path, size_t count) {
+    // Same as load_bin_f32 — reuse existing function
+    return load_bin_f32(path, count);
+}
+
+static FP32Weight load_fp32_weight(const std::string& dir, const char* name,
+                                    int K, int N, const std::string& bias_path) {
+    FP32Weight w;
+    w.K = K;
+    w.N = N;
+    w.data = load_bin_f32(dir + "/" + name + "_weight_fp32.bin", (size_t)K * N);
+    w.bias = load_bin_f32(bias_path, N);
+    return w;
+}
+
+void GPT2Engine::load_weights_fp32() {
+    int d = config_.d_model;
+    int ff = config_.d_ff;
+    for (int i = 0; i < config_.n_layers; ++i) {
+        char ld[256];
+        snprintf(ld, sizeof(ld), "%s/layer_%02d", model_dir_.c_str(), i);
+        std::string ldir(ld);
+        auto& fw = weights_.layers_fp32[i];
+
+        // Note: bias is shared between INT8 and FP32 paths (already loaded)
+        fw.qkv = {load_bin_f32(ldir + "/qkv_weight_fp32.bin", (size_t)d * 3 * d),
+                   weights_.layers[i].qkv_bias, d, 3 * d};
+        fw.out = {load_bin_f32(ldir + "/out_weight_fp32.bin", (size_t)d * d),
+                  weights_.layers[i].out_bias, d, d};
+        fw.ffn_up = {load_bin_f32(ldir + "/ffn_up_weight_fp32.bin", (size_t)d * ff),
+                     weights_.layers[i].ffn_up_bias, d, ff};
+        fw.ffn_down = {load_bin_f32(ldir + "/ffn_down_weight_fp32.bin", (size_t)ff * d),
+                       weights_.layers[i].ffn_down_bias, ff, d};
+    }
+}
+```
+
+Add a helper for cuBLAS SGEMM with bias:
+
+```cpp
+// cuBLAS SGEMM: C = A @ W + bias (row-major)
+// A: [M, K], W: [K, N], C: [M, N], bias: [N]
+static void cublas_linear(cublasHandle_t handle,
+                          int M, int N, int K,
+                          const float* A, const float* W, const float* bias,
+                          float* C, float* workspace) {
+    float alpha = 1.0f, beta = 0.0f;
+    // Row-major trick: C^T = W^T @ A^T
+    // Treating row-major as col-major: W [K,N] → "col-major [N,K]" = W^T
+    cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N,
+                N, M, K, &alpha, W, N, A, K, &beta, C, N);
+
+    // Add bias: C[i][j] += bias[j] for all rows i
+    // Simple kernel:
+    extern void run_bias_add(float* C, const float* bias, int M, int N);
+    run_bias_add(C, bias, M, N);
+}
+
+__global__ void bias_add_kernel(float* __restrict__ C, const float* __restrict__ bias,
+                                 int M, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= M * N) return;
+    C[idx] += bias[idx % N];
+}
+
+void run_bias_add(float* C, const float* bias, int M, int N) {
+    int total = M * N;
+    bias_add_kernel<<<(total + 255) / 256, 256>>>(C, bias, M, N);
+}
+
+// cuBLAS SGEMM + bias + GELU
+__global__ void bias_gelu_kernel(float* __restrict__ C, const float* __restrict__ bias,
+                                  int M, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= M * N) return;
+    float val = C[idx] + bias[idx % N];
+    float x3 = val * val * val;
+    C[idx] = 0.5f * val * (1.0f + tanhf(0.7978845608f * (val + 0.044715f * x3)));
+}
+
+void run_bias_gelu(float* C, const float* bias, int M, int N) {
+    int total = M * N;
+    bias_gelu_kernel<<<(total + 255) / 256, 256>>>(C, bias, M, N);
+}
+
+// cuBLAS SGEMM + bias + residual
+__global__ void bias_residual_kernel(float* __restrict__ C, const float* __restrict__ bias,
+                                      const float* __restrict__ residual, int M, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= M * N) return;
+    C[idx] += bias[idx % N] + residual[idx];
+}
+
+void run_bias_residual(float* C, const float* bias, const float* residual, int M, int N) {
+    int total = M * N;
+    bias_residual_kernel<<<(total + 255) / 256, 256>>>(C, bias, residual, M, N);
+}
+```
+
+Add the cuBLAS forward layer variant:
+
+```cpp
+void GPT2Engine::forward_layer_cublas(int layer, int seq_len, bool is_prefill) {
+    int d = config_.d_model;
+    int H = config_.n_heads;
+    int dh = config_.d_head;
+    int ff = config_.d_ff;
+    auto& lw = weights_.layers[layer];     // LN weights, bias (shared)
+    auto& fw = weights_.layers_fp32[layer]; // FP32 GEMM weights
+    int M = seq_len;
+
+    // --- Attention sub-block ---
+    CUDA_CHECK(cudaMemcpy(d_residual_, d_x_, (size_t)M * d * sizeof(float), cudaMemcpyDeviceToDevice));
+    run_layernorm(M, d, d_x_, lw.ln1_gamma, lw.ln1_beta, d_x_);
+
+    // QKV: cuBLAS SGEMM + bias
+    float alpha = 1.0f, beta = 0.0f;
+    cublasSgemm(cublas_handle_, CUBLAS_OP_N, CUBLAS_OP_N,
+                3 * d, M, d, &alpha, fw.qkv.data, 3 * d, d_x_, d, &beta, d_qkv_, 3 * d);
+    run_bias_add(d_qkv_, lw.qkv_bias, M, 3 * d);
+
+    float* Q = d_qkv_;
+    float* K = d_qkv_ + (size_t)M * d;
+    float* V = d_qkv_ + (size_t)M * d * 2;
+
+    int h_ctx;
+    CUDA_CHECK(cudaMemcpy(&h_ctx, d_context_lens_, sizeof(int), cudaMemcpyDeviceToHost));
+    int start_pos = is_prefill ? 0 : h_ctx;
+
+    kv_cache_append(layer, K, V, M, start_pos);
+    int total_ctx = start_pos + M;
+
+    size_t layer_cache_offset = (size_t)layer * num_phys_blocks_ * block_size_ * H * dh;
+    float* layer_k = d_k_cache_ + layer_cache_offset;
+    float* layer_v = d_v_cache_ + layer_cache_offset;
+
+    if (is_prefill) {
+        run_flash_attn_v2(1, H, M, dh, Q, K, V, d_attn_out_, true);
+    } else {
+        int ctx_for_decode = total_ctx;
+        CUDA_CHECK(cudaMemcpy(d_context_lens_, &ctx_for_decode, sizeof(int), cudaMemcpyHostToDevice));
+        int max_blocks = (ctx_for_decode + block_size_ - 1) / block_size_;
+        run_decode_attn(1, H, H, dh, Q, layer_k, layer_v,
+                        d_block_tables_, d_context_lens_,
+                        ctx_for_decode, block_size_, max_blocks,
+                        d_attn_out_, d_decode_workspace_);
+    }
+
+    // Output proj: cuBLAS SGEMM + bias + residual
+    cublasSgemm(cublas_handle_, CUBLAS_OP_N, CUBLAS_OP_N,
+                d, M, d, &alpha, fw.out.data, d, d_attn_out_, d, &beta, d_x_, d);
+    run_bias_residual(d_x_, lw.out_bias, d_residual_, M, d);
+
+    // --- FFN sub-block ---
+    CUDA_CHECK(cudaMemcpy(d_residual_, d_x_, (size_t)M * d * sizeof(float), cudaMemcpyDeviceToDevice));
+    run_layernorm(M, d, d_x_, lw.ln2_gamma, lw.ln2_beta, d_x_);
+
+    // FFN up: cuBLAS SGEMM + bias + GELU
+    cublasSgemm(cublas_handle_, CUBLAS_OP_N, CUBLAS_OP_N,
+                ff, M, d, &alpha, fw.ffn_up.data, ff, d_x_, d, &beta, d_ffn_hidden_, ff);
+    run_bias_gelu(d_ffn_hidden_, lw.ffn_up_bias, M, ff);
+
+    // FFN down: cuBLAS SGEMM + bias + residual
+    cublasSgemm(cublas_handle_, CUBLAS_OP_N, CUBLAS_OP_N,
+                d, M, ff, &alpha, fw.ffn_down.data, d, d_ffn_hidden_, ff, &beta, d_x_, d);
+    run_bias_residual(d_x_, lw.ffn_down_bias, d_residual_, M, d);
+}
+```
+
+Update `forward_layer` dispatch in `generate()`:
+
+```cpp
+for (int l = 0; l < config_.n_layers; ++l) {
+    if (backend_ == InferenceBackend::CUBLAS_FP32)
+        forward_layer_cublas(l, seq_len, is_prefill);
+    else
+        forward_layer(l, seq_len, is_prefill);
+}
+```
+
+Update constructor:
+
+```cpp
+GPT2Engine::GPT2Engine(const std::string& model_dir, InferenceBackend backend)
+    : model_dir_(model_dir), backend_(backend) {
+    load_config();
+    load_weights();
+    if (backend_ == InferenceBackend::CUBLAS_FP32) {
+        load_weights_fp32();
+        cublasCreate(&cublas_handle_);
+    }
+    alloc_workspace();
+}
+```
+
+- [ ] **Step 4: Update main.cu CLI to accept --backend flag**
+
+In `src/main.cu`, add parsing:
+
+```cpp
+    InferenceBackend backend = InferenceBackend::SLICK_INT8;
+
+    for (int i = 1; i < argc; ++i) {
+        // ... existing args ...
+        else if (strcmp(argv[i], "--backend") == 0 && i + 1 < argc) {
+            ++i;
+            if (strcmp(argv[i], "cublas") == 0) backend = InferenceBackend::CUBLAS_FP32;
+            else if (strcmp(argv[i], "int8") == 0) backend = InferenceBackend::SLICK_INT8;
+        }
+    }
+
+    GPT2Engine engine(model_dir, backend);
+```
+
+- [ ] **Step 5: Build and test both backends**
+
+```bash
+cmake --build build --target slick
+./build/slick --bench --greedy --prompt "The capital of France" --max-tokens 20
+./build/slick --bench --greedy --prompt "The capital of France" --max-tokens 20 --backend cublas
+```
+
+Expected: Both produce English text. The INT8 backend should show higher TPS than cuBLAS FP32.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add python/export_gpt2.py include/gpt2_types.cuh src/gpt2_engine.cuh src/gpt2_engine.cu src/main.cu
+git commit -m "feat: add cuBLAS FP32 backend for baseline comparison"
+```
+
+---
+
+### Task 13: PyTorch Baseline Benchmark
+
+**Files:**
+- Create: `python/benchmark_pytorch.py`
+
+- [ ] **Step 1: Write PyTorch benchmark script**
+
+Create `python/benchmark_pytorch.py`:
+
+```python
+#!/usr/bin/env python3
+"""Benchmark HuggingFace GPT-2 inference on GPU — baseline for SLICK comparison."""
+
+import argparse
+import json
+import time
+import torch
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
+
+
+def benchmark(prompt: str, max_tokens: int, device: str = "cuda"):
+    print(f"Loading GPT-2 Small on {device}...")
+    model = GPT2LMHeadModel.from_pretrained("gpt2").to(device).eval()
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+
+    input_ids = tokenizer.encode(prompt, return_tensors="pt").to(device)
+    prompt_len = input_ids.shape[1]
+    print(f"Prompt ({prompt_len} tokens): {prompt}")
+
+    # Warmup
+    with torch.no_grad():
+        _ = model.generate(input_ids, max_new_tokens=5, do_sample=False)
+    torch.cuda.synchronize()
+
+    # Benchmark with CUDA events for accurate GPU timing
+    start_event = torch.cuda.Event(enable_timing=True)
+    first_token_event = torch.cuda.Event(enable_timing=True)
+    end_event = torch.cuda.Event(enable_timing=True)
+
+    generated_tokens = []
+    itl_samples = []
+    past_key_values = None
+
+    torch.cuda.synchronize()
+    start_event.record()
+
+    with torch.no_grad():
+        # Prefill
+        outputs = model(input_ids, past_key_values=None, use_cache=True)
+        logits = outputs.logits[:, -1, :]
+        next_token = torch.argmax(logits, dim=-1, keepdim=True)
+        past_key_values = outputs.past_key_values
+
+        first_token_event.record()
+        torch.cuda.synchronize()
+
+        generated_tokens.append(next_token.item())
+        prev_event = torch.cuda.Event(enable_timing=True)
+        prev_event.record()
+
+        # Decode loop
+        for step in range(max_tokens - 1):
+            if next_token.item() == tokenizer.eos_token_id:
+                break
+
+            outputs = model(next_token, past_key_values=past_key_values, use_cache=True)
+            logits = outputs.logits[:, -1, :]
+            next_token = torch.argmax(logits, dim=-1, keepdim=True)
+            past_key_values = outputs.past_key_values
+
+            step_event = torch.cuda.Event(enable_timing=True)
+            step_event.record()
+            torch.cuda.synchronize()
+            itl_samples.append(prev_event.elapsed_time(step_event))
+            prev_event = step_event
+
+            generated_tokens.append(next_token.item())
+            print(tokenizer.decode([next_token.item()]), end="", flush=True)
+
+    end_event.record()
+    torch.cuda.synchronize()
+
+    # Compute metrics
+    ttft_ms = start_event.elapsed_time(first_token_event)
+    total_ms = start_event.elapsed_time(end_event)
+    num_tokens = len(generated_tokens)
+    tpot_ms = total_ms / num_tokens if num_tokens > 0 else 0
+    tps = num_tokens / (total_ms / 1000.0) if total_ms > 0 else 0
+
+    itl_min = min(itl_samples) if itl_samples else 0
+    itl_max = max(itl_samples) if itl_samples else 0
+    itl_sorted = sorted(itl_samples)
+    itl_p95 = itl_sorted[int(len(itl_sorted) * 0.95)] if len(itl_sorted) >= 20 else itl_max
+
+    # VRAM
+    vram_used = torch.cuda.memory_allocated() / 1024 / 1024
+    vram_total = torch.cuda.get_device_properties(0).total_mem / 1024 / 1024
+
+    generated_text = tokenizer.decode(generated_tokens)
+
+    print(f"\n\n{'='*50}")
+    print(f"PyTorch GPT-2 FP32 Baseline")
+    print(f"{'='*50}")
+    print(f"Generated: {prompt}{generated_text}")
+    print(f"Tokens:       {num_tokens}")
+    print(f"TTFT:         {ttft_ms:.1f} ms")
+    print(f"TPOT:         {tpot_ms:.1f} ms")
+    print(f"TPS:          {tps:.1f}")
+    print(f"ITL P95:      {itl_p95:.1f} ms")
+    print(f"ITL min/max:  {itl_min:.1f}/{itl_max:.1f} ms")
+    print(f"End-to-end:   {total_ms:.1f} ms")
+    print(f"VRAM:         {vram_used:.0f}/{vram_total:.0f} MB")
+
+    # Save as JSON for comparison script
+    results = {
+        "backend": "pytorch_fp32",
+        "tokens": num_tokens,
+        "ttft_ms": round(ttft_ms, 1),
+        "tpot_ms": round(tpot_ms, 1),
+        "tps": round(tps, 1),
+        "itl_p95_ms": round(itl_p95, 1),
+        "end_to_end_ms": round(total_ms, 1),
+        "vram_mb": round(vram_used, 0),
+    }
+    with open("pytorch_baseline.json", "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"\nResults saved to pytorch_baseline.json")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--prompt", default="The meaning of life is",
+                        help="Input prompt")
+    parser.add_argument("--max-tokens", type=int, default=128,
+                        help="Maximum tokens to generate")
+    args = parser.parse_args()
+    benchmark(args.prompt, args.max_tokens)
+```
+
+- [ ] **Step 2: Run and verify**
+
+```bash
+uv run python python/benchmark_pytorch.py --prompt "The meaning of life is" --max-tokens 64
+```
+
+Expected: Prints generated text and metrics. Saves `pytorch_baseline.json`. Note the TPS value — this is the number to beat.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add python/benchmark_pytorch.py
+git commit -m "bench: add PyTorch FP32 baseline benchmark script"
+```
+
+---
+
+### Task 14: Three-Way Comparison Demo
+
+**Files:**
+- Create: `scripts/demo_compare.sh`
+- Modify: `src/main.cu` (add `--compare` flag and JSON output for `--bench`)
+
+- [ ] **Step 1: Add JSON metrics output to bench mode**
+
+In `src/main.cu`, update the bench mode to optionally write a JSON results file:
+
+```cpp
+    if (bench_mode) {
+        if (initial_prompt.empty()) initial_prompt = "The meaning of life is";
+        auto tokens = tokenizer.encode(initial_prompt);
+        printf("Prompt (%d tokens): %s\n", (int)tokens.size(), initial_prompt.c_str());
+
+        InferenceMetrics metrics;
+        GpuTimer total;
+        total.tic();
+
+        engine.generate(tokens, max_tokens, temperature, top_k_val, greedy,
+                        [&](const std::string& tok_id_str) {
+                            int id = atoi(tok_id_str.c_str());
+                            printf("%s", tokenizer.decode(id).c_str());
+                            fflush(stdout);
+                        }, metrics);
+
+        float total_ms = total.toc();
+        metrics.end_to_end_ms = total_ms;
+
+        const char* backend_name = (backend == InferenceBackend::CUBLAS_FP32)
+                                    ? "cublas_fp32" : "slick_int8";
+
+        printf("\n\n==================================================\n");
+        printf("SLICK %s\n", backend_name);
+        printf("==================================================\n");
+        printf("Tokens:       %d\n", metrics.tokens_generated);
+        printf("TTFT:         %.1f ms\n", metrics.ttft_ms);
+        printf("TPOT:         %.1f ms\n", metrics.tpot_ms);
+        printf("TPS:          %.1f\n", metrics.tps);
+        printf("ITL P95:      %.1f ms\n", metrics.itl_p95_ms);
+        printf("ITL min/max:  %.1f/%.1f ms\n", metrics.itl_min_ms, metrics.itl_max_ms);
+        printf("End-to-end:   %.1f ms\n", metrics.end_to_end_ms);
+        printf("KV Cache:     %.0f%%\n", metrics.kv_cache_pct);
+        printf("VRAM:         %.0f/%.0f MB\n", metrics.vram_used_mb, metrics.vram_total_mb);
+        printf("MBU:          %.1f%%\n", metrics.mbu * 100.0f);
+
+        // Write JSON for comparison script
+        char json_file[256];
+        snprintf(json_file, sizeof(json_file), "%s_results.json", backend_name);
+        FILE* jf = fopen(json_file, "w");
+        if (jf) {
+            fprintf(jf, "{\n");
+            fprintf(jf, "  \"backend\": \"%s\",\n", backend_name);
+            fprintf(jf, "  \"tokens\": %d,\n", metrics.tokens_generated);
+            fprintf(jf, "  \"ttft_ms\": %.1f,\n", metrics.ttft_ms);
+            fprintf(jf, "  \"tpot_ms\": %.1f,\n", metrics.tpot_ms);
+            fprintf(jf, "  \"tps\": %.1f,\n", metrics.tps);
+            fprintf(jf, "  \"itl_p95_ms\": %.1f,\n", metrics.itl_p95_ms);
+            fprintf(jf, "  \"end_to_end_ms\": %.1f,\n", metrics.end_to_end_ms);
+            fprintf(jf, "  \"vram_mb\": %.0f\n", metrics.vram_used_mb);
+            fprintf(jf, "}\n");
+            fclose(jf);
+            printf("\nResults saved to %s\n", json_file);
+        }
+        return 0;
+    }
+```
+
+- [ ] **Step 2: Write the comparison shell script**
+
+Create `scripts/demo_compare.sh`:
+
+```bash
+#!/bin/bash
+# Three-way GPT-2 inference comparison: PyTorch FP32 vs cuBLAS FP32 vs SLICK INT8
+set -e
+
+PROMPT="${1:-The meaning of life is}"
+MAX_TOKENS="${2:-64}"
+MODEL_DIR="${3:-models/gpt2-int8}"
+
+echo "========================================================"
+echo " SLICK — Three-Way Inference Comparison"
+echo " Prompt: \"$PROMPT\""
+echo " Max tokens: $MAX_TOKENS"
+echo " Hardware: $(nvidia-smi --query-gpu=name --format=csv,noheader)"
+echo "========================================================"
+echo ""
+
+# 1. PyTorch FP32 baseline
+echo ">>> [1/3] Running PyTorch FP32 baseline..."
+echo "--------------------------------------------------------"
+uv run python python/benchmark_pytorch.py \
+    --prompt "$PROMPT" --max-tokens "$MAX_TOKENS"
+echo ""
+
+# 2. cuBLAS FP32 backend
+echo ">>> [2/3] Running SLICK cuBLAS FP32 backend..."
+echo "--------------------------------------------------------"
+./build/slick --bench --greedy --backend cublas \
+    --model "$MODEL_DIR" --prompt "$PROMPT" --max-tokens "$MAX_TOKENS"
+echo ""
+
+# 3. SLICK INT8 (our optimized kernels)
+echo ">>> [3/3] Running SLICK INT8 (optimized)..."
+echo "--------------------------------------------------------"
+./build/slick --bench --greedy \
+    --model "$MODEL_DIR" --prompt "$PROMPT" --max-tokens "$MAX_TOKENS"
+echo ""
+
+# Print comparison table from JSON files
+echo "========================================================"
+echo " COMPARISON TABLE"
+echo "========================================================"
+python3 -c "
+import json, os
+
+backends = []
+for f in ['pytorch_baseline.json', 'cublas_fp32_results.json', 'slick_int8_results.json']:
+    if os.path.exists(f):
+        with open(f) as fh:
+            backends.append(json.load(fh))
+
+if not backends:
+    print('No result files found.')
+    exit()
+
+# Header
+print(f'{\"Metric\":<20} ', end='')
+for b in backends:
+    print(f'{b[\"backend\"]:>18} ', end='')
+print()
+print('-' * (20 + 19 * len(backends)))
+
+# Rows
+for key, label, unit in [
+    ('ttft_ms', 'TTFT', 'ms'),
+    ('tpot_ms', 'TPOT', 'ms'),
+    ('tps', 'TPS', 'tok/s'),
+    ('itl_p95_ms', 'ITL (P95)', 'ms'),
+    ('end_to_end_ms', 'End-to-end', 'ms'),
+    ('vram_mb', 'VRAM', 'MB'),
+    ('tokens', 'Tokens', ''),
+]:
+    print(f'{label + \" (\" + unit + \")\" if unit else label:<20} ', end='')
+    for b in backends:
+        val = b.get(key, '--')
+        print(f'{val:>18} ', end='')
+    print()
+
+# Speedup row
+if len(backends) == 3:
+    print('-' * (20 + 19 * len(backends)))
+    pt_tps = backends[0].get('tps', 1)
+    print(f'{\"Speedup vs PyTorch\":<20} ', end='')
+    for b in backends:
+        speedup = b.get('tps', 0) / pt_tps if pt_tps > 0 else 0
+        print(f'{speedup:>17.1f}x ', end='')
+    print()
+"
+
+# Cleanup
+rm -f pytorch_baseline.json cublas_fp32_results.json slick_int8_results.json
+```
+
+- [ ] **Step 3: Make executable and test**
+
+```bash
+chmod +x scripts/demo_compare.sh
+./scripts/demo_compare.sh "The capital of France is" 32
+```
+
+Expected output:
+
+```
+========================================================
+ SLICK — Three-Way Inference Comparison
+ Prompt: "The capital of France is"
+ Max tokens: 32
+ Hardware: NVIDIA GeForce GTX 1650 Ti
+========================================================
+
+>>> [1/3] Running PyTorch FP32 baseline...
+...
+>>> [2/3] Running SLICK cuBLAS FP32 backend...
+...
+>>> [3/3] Running SLICK INT8 (optimized)...
+...
+
+========================================================
+ COMPARISON TABLE
+========================================================
+Metric                     pytorch_fp32      cublas_fp32       slick_int8
+-----------------------------------------------------------------------
+TTFT (ms)                      xxx.x            xxx.x            xxx.x
+TPOT (ms)                      xxx.x            xxx.x            xxx.x
+TPS (tok/s)                    xxx.x            xxx.x            xxx.x
+ITL (P95) (ms)                 xxx.x            xxx.x            xxx.x
+End-to-end (ms)                xxx.x            xxx.x            xxx.x
+VRAM (MB)                      xxxx             xxxx             xxxx
+-----------------------------------------------------------------------
+Speedup vs PyTorch              1.0x             x.xx             x.xx
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add scripts/demo_compare.sh src/main.cu
+git commit -m "feat: add three-way inference comparison demo"
+```
+
 - [ ] **Step 5: Update README roadmap**
 
-In `README.md`, update the Week 7 roadmap entry from `- [ ]` to `- [x]`:
+In `README.md`, update the Week 7 roadmap entry:
 
 ```
 - [x] Week 7: GPT-2 inference demo
