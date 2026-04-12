@@ -203,7 +203,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(ftxui)
 
 # --- SLICK main executable (Week 7) ---
-add_executable(slick src/main.cu)
+add_executable(slick src/main.cpp)
 target_include_directories(slick PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/kernels
