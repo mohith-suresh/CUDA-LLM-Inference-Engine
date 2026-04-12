@@ -1,13 +1,15 @@
 // src/gpt2_engine.cuh
 #pragma once
 #include "gpt2_types.cuh"
+#include <cublas_v2.h>
 #include <string>
 #include <vector>
 #include <functional>
 
 class GPT2Engine {
 public:
-    GPT2Engine(const std::string& model_dir);
+    GPT2Engine(const std::string& model_dir,
+               InferenceBackend backend = InferenceBackend::SLICK_INT8);
     ~GPT2Engine();
 
     void generate(const std::vector<int>& prompt_tokens,
@@ -55,14 +57,20 @@ private:
     float* d_k_buf_;
     float* d_v_buf_;
 
+    InferenceBackend backend_;
+    cublasHandle_t cublas_handle_;
+    bool cublas_ready_;
+
     void load_config();
     void load_weights();
+    void load_weights_fp32();
     void alloc_workspace();
     void free_all();
 
     // Forward helpers
     void embed(const int* host_token_ids, int seq_len, int start_pos, float* out);
     void forward_layer(int layer, int seq_len, bool is_prefill);
+    void forward_layer_cublas(int layer, int seq_len, bool is_prefill);
     void forward_final_ln(int seq_len, float* out_last_token);
     void forward_logits(const float* x_last, float* out_logits);
     int sample_token(float* d_logits, float temperature, int top_k, bool greedy);

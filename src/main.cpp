@@ -80,6 +80,7 @@ int main(int argc, char** argv) {
     int top_k_val = 50;
     bool greedy = false;
     bool bench_mode = false;
+    InferenceBackend backend = InferenceBackend::SLICK_INT8;
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) model_dir = argv[++i];
@@ -89,10 +90,17 @@ int main(int argc, char** argv) {
         else if (strcmp(argv[i], "--top-k") == 0 && i + 1 < argc) top_k_val = atoi(argv[++i]);
         else if (strcmp(argv[i], "--greedy") == 0) greedy = true;
         else if (strcmp(argv[i], "--bench") == 0) bench_mode = true;
+        else if (strcmp(argv[i], "--backend") == 0 && i + 1 < argc) {
+            ++i;
+            if (strcmp(argv[i], "cublas") == 0) backend = InferenceBackend::CUBLAS_FP32;
+            else if (strcmp(argv[i], "int8") == 0) backend = InferenceBackend::SLICK_INT8;
+        }
     }
 
-    printf("Loading model from %s...\n", model_dir.c_str());
-    GPT2Engine engine(model_dir);
+    const char* backend_name = (backend == InferenceBackend::CUBLAS_FP32)
+                                ? "cublas_fp32" : "slick_int8";
+    printf("Loading model from %s (backend=%s)...\n", model_dir.c_str(), backend_name);
+    GPT2Engine engine(model_dir, backend);
     BPETokenizer tokenizer(model_dir);
     printf("Model loaded. Vocab: %d\n", tokenizer.vocab_size());
 

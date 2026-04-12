@@ -40,12 +40,29 @@ struct LayerWeights {
     float* ffn_down_bias;
 };
 
+enum class InferenceBackend { SLICK_INT8, CUBLAS_FP32 };
+
+struct FP32Weight {
+    float* data;    // [K, N] row-major
+    float* bias;    // [N] (aliases LayerWeights bias, not owned)
+    int K;
+    int N;
+};
+
+struct LayerWeightsFP32 {
+    FP32Weight qkv;       // [d, 3d]
+    FP32Weight out;       // [d, d]
+    FP32Weight ffn_up;    // [d, ff]
+    FP32Weight ffn_down;  // [ff, d]
+};
+
 struct GPT2Weights {
     float* wte;
     float* wpe;
     float* ln_f_gamma;
     float* ln_f_beta;
     LayerWeights layers[12];
+    LayerWeightsFP32 layers_fp32[12];  // populated only for CUBLAS_FP32 backend
 };
 
 struct InferenceMetrics {

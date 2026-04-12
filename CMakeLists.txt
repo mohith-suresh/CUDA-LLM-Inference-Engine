@@ -174,6 +174,7 @@ target_link_libraries(gpt2_engine PUBLIC
     paged_attention_kernels
     attention_kernels
     softmax_kernels
+    ${CUBLAS_LIB}
 )
 
 # --- Dependencies ---

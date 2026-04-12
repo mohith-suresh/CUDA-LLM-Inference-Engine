@@ -45,6 +45,17 @@ def save_bin(path: str, arr: np.ndarray):
     print(f"  {path}: {arr.shape} {arr.dtype} ({arr.nbytes} bytes)")
 
 
+def save_fp32_weight(layer_dir: str, name: str, weight_fp32: np.ndarray):
+    """Save FP32 weight in [K, N] row-major for cuBLAS SGEMM.
+
+    cuBLAS y = x @ W where x is [M, K] and W is [K, N]. Store W as-is.
+    """
+    save_bin(
+        os.path.join(layer_dir, f"{name}_weight_fp32.bin"),
+        weight_fp32.astype(np.float32),
+    )
+
+
 def export_model(output_dir: str):
     try:
         from transformers import GPT2LMHeadModel, GPT2Tokenizer
@@ -111,6 +122,7 @@ def export_model(output_dir: str):
             os.path.join(layer_dir, "qkv_bias.bin"),
             sd[f"{prefix}.attn.c_attn.bias"].numpy().astype(np.float32),
         )
+        save_fp32_weight(layer_dir, "qkv", qkv_w)
 
         out_w = sd[f"{prefix}.attn.c_proj.weight"].numpy().astype(np.float32)
         out_wt = out_w.T.copy()
@@ -121,6 +133,7 @@ def export_model(output_dir: str):
             os.path.join(layer_dir, "out_bias.bin"),
             sd[f"{prefix}.attn.c_proj.bias"].numpy().astype(np.float32),
         )
+        save_fp32_weight(layer_dir, "out", out_w)
 
         save_bin(
             os.path.join(layer_dir, "ln2_gamma.bin"),
@@ -140,6 +153,7 @@ def export_model(output_dir: str):
             os.path.join(layer_dir, "ffn_up_bias.bin"),
             sd[f"{prefix}.mlp.c_fc.bias"].numpy().astype(np.float32),
         )
+        save_fp32_weight(layer_dir, "ffn_up", up_w)
 
         down_w = sd[f"{prefix}.mlp.c_proj.weight"].numpy().astype(np.float32)
         down_wt = down_w.T.copy()
@@ -150,6 +164,7 @@ def export_model(output_dir: str):
             os.path.join(layer_dir, "ffn_down_bias.bin"),
             sd[f"{prefix}.mlp.c_proj.bias"].numpy().astype(np.float32),
         )
+        save_fp32_weight(layer_dir, "ffn_down", down_w)
 
         print(f"Layer {i}: done")
 

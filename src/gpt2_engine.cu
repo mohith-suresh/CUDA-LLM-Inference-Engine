@@ -152,9 +152,42 @@ void GPT2Engine::alloc_workspace() {
     CUDA_CHECK(cudaMalloc(&d_decode_workspace_, ws_size));
 }
 
-GPT2Engine::GPT2Engine(const std::string& model_dir) : model_dir_(model_dir) {
+static FP32Weight load_fp32_weight(const std::string& dir, const char* name,
+                                    int K, int N, float* bias_shared) {
+    FP32Weight w;
+    w.K = K;
+    w.N = N;
+    w.data = load_bin_f32(dir + "/" + name + "_weight_fp32.bin", (size_t)K * N);
+    w.bias = bias_shared;
+    return w;
+}
+
+void GPT2Engine::load_weights_fp32() {
+    int d = config_.d_model;
+    int ff = config_.d_ff;
+    for (int i = 0; i < config_.n_layers; ++i) {
+        char ld[256];
+        snprintf(ld, sizeof(ld), "%s/layer_%02d", model_dir_.c_str(), i);
+        std::string ldir(ld);
+        auto& fw = weights_.layers_fp32[i];
+        auto& lw = weights_.layers[i];
+        fw.qkv      = load_fp32_weight(ldir, "qkv",      d,  3 * d, lw.qkv_bias);
+        fw.out      = load_fp32_weight(ldir, "out",      d,  d,     lw.out_bias);
+        fw.ffn_up   = load_fp32_weight(ldir, "ffn_up",   d,  ff,    lw.ffn_up_bias);
+        fw.ffn_down = load_fp32_weight(ldir, "ffn_down", ff, d,     lw.ffn_down_bias);
+    }
+    printf("Loaded FP32 weights for cuBLAS backend\n");
+}
+
+GPT2Engine::GPT2Engine(const std::string& model_dir, InferenceBackend backend)
+    : model_dir_(model_dir), backend_(backend), cublas_ready_(false) {
     load_config();
     load_weights();
+    if (backend_ == InferenceBackend::CUBLAS_FP32) {
+        load_weights_fp32();
+        cublasCreate(&cublas_handle_);
+        cublas_ready_ = true;
+    }
     alloc_workspace();
 }
 
@@ -178,6 +211,17 @@ void GPT2Engine::free_all() {
         cudaFree(lw.ln2_gamma); cudaFree(lw.ln2_beta);
         cudaFree(lw.ffn_up.packed); cudaFree(lw.ffn_up.scale); cudaFree(lw.ffn_up_bias);
         cudaFree(lw.ffn_down.packed); cudaFree(lw.ffn_down.scale); cudaFree(lw.ffn_down_bias);
+    }
+
+    if (backend_ == InferenceBackend::CUBLAS_FP32) {
+        for (int i = 0; i < config_.n_layers; ++i) {
+            auto& fw = weights_.layers_fp32[i];
+            cudaFree(fw.qkv.data);
+            cudaFree(fw.out.data);
+            cudaFree(fw.ffn_up.data);
+            cudaFree(fw.ffn_down.data);
+        }
+        if (cublas_ready_) cublasDestroy(cublas_handle_);
     }
 }
 
@@ -264,6 +308,48 @@ __global__ void kv_cache_write_kernel(
     int cache_idx = ((phys * block_size + block_off) * n_heads + h) * d_head + d;
     k_cache[cache_idx] = K_src[(t * n_heads + h) * d_head + d];
     v_cache[cache_idx] = V_src[(t * n_heads + h) * d_head + d];
+}
+
+// ============================================================
+// cuBLAS backend helpers: bias add / bias+GELU / bias+residual
+// ============================================================
+__global__ void bias_add_kernel(float* __restrict__ C, const float* __restrict__ bias,
+                                 int M, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= M * N) return;
+    C[idx] += bias[idx % N];
+}
+
+__global__ void bias_gelu_kernel(float* __restrict__ C, const float* __restrict__ bias,
+                                  int M, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= M * N) return;
+    float v = C[idx] + bias[idx % N];
+    float v3 = v * v * v;
+    C[idx] = 0.5f * v * (1.0f + tanhf(0.7978845608f * (v + 0.044715f * v3)));
+}
+
+__global__ void bias_residual_kernel(float* __restrict__ C, const float* __restrict__ bias,
+                                      const float* __restrict__ residual, int M, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= M * N) return;
+    C[idx] += bias[idx % N] + residual[idx];
+}
+
+static void run_bias_add(float* C, const float* bias, int M, int N) {
+    int total = M * N;
+    bias_add_kernel<<<(total + 255) / 256, 256>>>(C, bias, M, N);
+}
+
+static void run_bias_gelu(float* C, const float* bias, int M, int N) {
+    int total = M * N;
+    bias_gelu_kernel<<<(total + 255) / 256, 256>>>(C, bias, M, N);
+}
+
+static void run_bias_residual(float* C, const float* bias, const float* residual,
+                               int M, int N) {
+    int total = M * N;
+    bias_residual_kernel<<<(total + 255) / 256, 256>>>(C, bias, residual, M, N);
 }
 
 // Vocab projection (FP32): logits[j] = dot(hidden, wte[j])
@@ -406,6 +492,87 @@ void GPT2Engine::forward_layer(int layer, int seq_len, bool is_prefill) {
                                  d_residual_, d_x_);
 }
 
+void GPT2Engine::forward_layer_cublas(int layer, int seq_len, bool is_prefill) {
+    int d  = config_.d_model;
+    int H  = config_.n_heads;
+    int dh = config_.d_head;
+    int ff = config_.d_ff;
+    auto& lw = weights_.layers[layer];
+    auto& fw = weights_.layers_fp32[layer];
+    int M = seq_len;
+    float alpha = 1.0f, beta = 0.0f;
+
+    // --- Attention sub-block ---
+    CUDA_CHECK(cudaMemcpy(d_residual_, d_x_,
+                          (size_t)M * d * sizeof(float), cudaMemcpyDeviceToDevice));
+    run_layernorm(M, d, d_x_, lw.ln1_gamma, lw.ln1_beta, d_x_);
+
+    // QKV = x @ W_qkv + bias    [M, 3d] = [M,d] @ [d, 3d]
+    cublasSgemm(cublas_handle_, CUBLAS_OP_N, CUBLAS_OP_N,
+                3 * d, M, d, &alpha,
+                fw.qkv.data, 3 * d,
+                d_x_, d,
+                &beta, d_qkv_, 3 * d);
+    run_bias_add(d_qkv_, lw.qkv_bias, M, 3 * d);
+
+    float* Q_mhd = d_qkv_;
+    float* K_mhd = d_qkv_ + (size_t)M * d;
+    float* V_mhd = d_qkv_ + (size_t)M * 2 * d;
+
+    int start_pos = current_pos_;
+    kv_cache_append(layer, K_mhd, V_mhd, M, start_pos);
+
+    size_t layer_off = (size_t)layer * num_phys_blocks_ * block_size_ * H * dh;
+    float* layer_k = d_k_cache_ + layer_off;
+    float* layer_v = d_v_cache_ + layer_off;
+
+    if (is_prefill) {
+        transpose_mhd_to_hmd(Q_mhd, d_q_buf_, M, H, dh);
+        transpose_mhd_to_hmd(K_mhd, d_k_buf_, M, H, dh);
+        transpose_mhd_to_hmd(V_mhd, d_v_buf_, M, H, dh);
+        run_flash_attn_v2(1, H, M, dh, d_q_buf_, d_k_buf_, d_v_buf_, d_v_buf_, true);
+        transpose_hmd_to_mhd(d_v_buf_, d_attn_out_, M, H, dh);
+    } else {
+        int ctx = current_pos_ + 1;
+        CUDA_CHECK(cudaMemcpy(d_context_lens_, &ctx, sizeof(int), cudaMemcpyHostToDevice));
+        int max_blocks_seq = (ctx + block_size_ - 1) / block_size_;
+        run_decode_attn(1, H, H, dh,
+                        Q_mhd, layer_k, layer_v,
+                        d_block_tables_, d_context_lens_,
+                        ctx, block_size_, max_blocks_seq,
+                        d_attn_out_, d_decode_workspace_);
+    }
+
+    // Output projection: attn_out @ W_o + bias + residual  -> x   [M,d]=[M,d]@[d,d]
+    cublasSgemm(cublas_handle_, CUBLAS_OP_N, CUBLAS_OP_N,
+                d, M, d, &alpha,
+                fw.out.data, d,
+                d_attn_out_, d,
+                &beta, d_x_, d);
+    run_bias_residual(d_x_, lw.out_bias, d_residual_, M, d);
+
+    // --- FFN sub-block ---
+    CUDA_CHECK(cudaMemcpy(d_residual_, d_x_,
+                          (size_t)M * d * sizeof(float), cudaMemcpyDeviceToDevice));
+    run_layernorm(M, d, d_x_, lw.ln2_gamma, lw.ln2_beta, d_x_);
+
+    // FFN up: [M,d] -> [M,ff]
+    cublasSgemm(cublas_handle_, CUBLAS_OP_N, CUBLAS_OP_N,
+                ff, M, d, &alpha,
+                fw.ffn_up.data, ff,
+                d_x_, d,
+                &beta, d_ffn_hidden_, ff);
+    run_bias_gelu(d_ffn_hidden_, lw.ffn_up_bias, M, ff);
+
+    // FFN down: [M,ff] -> [M,d]
+    cublasSgemm(cublas_handle_, CUBLAS_OP_N, CUBLAS_OP_N,
+                d, M, ff, &alpha,
+                fw.ffn_down.data, d,
+                d_ffn_hidden_, ff,
+                &beta, d_x_, d);
+    run_bias_residual(d_x_, lw.ffn_down_bias, d_residual_, M, d);
+}
+
 void GPT2Engine::forward_final_ln(int seq_len, float* out_last_token) {
     int d = config_.d_model;
     const float* last = d_x_ + (size_t)(seq_len - 1) * d;
@@ -458,8 +625,12 @@ void GPT2Engine::generate(const std::vector<int>& prompt_tokens,
     ensure_kv_blocks(prompt_len);
     embed(d_tokens, prompt_len, 0, d_x_);
 
-    for (int l = 0; l < config_.n_layers; ++l)
-        forward_layer(l, prompt_len, /*is_prefill=*/true);
+    for (int l = 0; l < config_.n_layers; ++l) {
+        if (backend_ == InferenceBackend::CUBLAS_FP32)
+            forward_layer_cublas(l, prompt_len, /*is_prefill=*/true);
+        else
+            forward_layer(l, prompt_len, /*is_prefill=*/true);
+    }
 
     current_pos_ = prompt_len;
     CUDA_CHECK(cudaMemcpy(d_context_lens_, &current_pos_, sizeof(int), cudaMemcpyHostToDevice));
@@ -495,8 +666,12 @@ void GPT2Engine::generate(const std::vector<int>& prompt_tokens,
         CUDA_CHECK(cudaMemcpy(d_tokens, &next_token, sizeof(int), cudaMemcpyHostToDevice));
         embed(d_tokens, 1, current_pos_, d_x_);
 
-        for (int l = 0; l < config_.n_layers; ++l)
-            forward_layer(l, 1, /*is_prefill=*/false);
+        for (int l = 0; l < config_.n_layers; ++l) {
+            if (backend_ == InferenceBackend::CUBLAS_FP32)
+                forward_layer_cublas(l, 1, /*is_prefill=*/false);
+            else
+                forward_layer(l, 1, /*is_prefill=*/false);
+        }
 
         current_pos_++;
         CUDA_CHECK(cudaMemcpy(d_context_lens_, &current_pos_, sizeof(int), cudaMemcpyHostToDevice));
