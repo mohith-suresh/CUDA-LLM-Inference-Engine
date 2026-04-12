@@ -31,3 +31,34 @@ void run_int8_gemm(int M, int N, int K,
                    const float* scale_A,
                    const float* scale_B,
                    float* C);
+
+// Epilogue types for fused INT8 GEMM
+enum class I8Epilogue { Plain, BiasOnly, BiasGELU, BiasResidual };
+
+// INT8 GEMM with bias: C = dequant(A @ B^T) + bias
+void run_int8_gemm_bias(int M, int N, int K,
+                        const int32_t* A_packed,
+                        const int32_t* BT_packed,
+                        const float* scale_A,
+                        const float* scale_B,
+                        const float* bias,
+                        float* C);
+
+// INT8 GEMM with bias + GELU
+void run_int8_gemm_bias_gelu(int M, int N, int K,
+                              const int32_t* A_packed,
+                              const int32_t* BT_packed,
+                              const float* scale_A,
+                              const float* scale_B,
+                              const float* bias,
+                              float* C);
+
+// INT8 GEMM with bias + residual
+void run_int8_gemm_bias_residual(int M, int N, int K,
+                                  const int32_t* A_packed,
+                                  const int32_t* BT_packed,
+                                  const float* scale_A,
+                                  const float* scale_B,
+                                  const float* bias,
+                                  const float* residual,
+                                  float* C);
