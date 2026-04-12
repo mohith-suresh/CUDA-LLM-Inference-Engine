@@ -117,15 +117,37 @@ int main(int argc, char** argv) {
                             fflush(stdout);
                         }, metrics);
 
-        printf("\n\n--- Metrics ---\n");
-        printf("TTFT:        %.1f ms\n", metrics.ttft_ms);
-        printf("TPOT:        %.1f ms\n", metrics.tpot_ms);
-        printf("ITL P95:     %.1f ms\n", metrics.itl_p95_ms);
-        printf("TPS:         %.1f\n", metrics.tps);
-        printf("Tokens:      %d\n", metrics.tokens_generated);
-        printf("KV Cache:    %.0f%%\n", metrics.kv_cache_pct);
-        printf("VRAM:        %.0f / %.0f MB\n", metrics.vram_used_mb, metrics.vram_total_mb);
-        printf("End-to-end:  %.1f ms\n", metrics.end_to_end_ms);
+        printf("\n\n==================================================\n");
+        printf("SLICK %s\n", backend_name);
+        printf("==================================================\n");
+        printf("Tokens:       %d\n", metrics.tokens_generated);
+        printf("TTFT:         %.1f ms\n", metrics.ttft_ms);
+        printf("TPOT:         %.1f ms\n", metrics.tpot_ms);
+        printf("TPS:          %.1f\n", metrics.tps);
+        printf("ITL P95:      %.1f ms\n", metrics.itl_p95_ms);
+        printf("ITL min/max:  %.1f/%.1f ms\n", metrics.itl_min_ms, metrics.itl_max_ms);
+        printf("End-to-end:   %.1f ms\n", metrics.end_to_end_ms);
+        printf("KV Cache:     %.0f%%\n", metrics.kv_cache_pct);
+        printf("VRAM:         %.0f/%.0f MB\n", metrics.vram_used_mb, metrics.vram_total_mb);
+        printf("MBU:          %.1f%%\n", metrics.mbu * 100.0f);
+
+        char json_file[256];
+        snprintf(json_file, sizeof(json_file), "%s_results.json", backend_name);
+        FILE* jf = fopen(json_file, "w");
+        if (jf) {
+            fprintf(jf, "{\n");
+            fprintf(jf, "  \"backend\": \"%s\",\n", backend_name);
+            fprintf(jf, "  \"tokens\": %d,\n", metrics.tokens_generated);
+            fprintf(jf, "  \"ttft_ms\": %.1f,\n", metrics.ttft_ms);
+            fprintf(jf, "  \"tpot_ms\": %.1f,\n", metrics.tpot_ms);
+            fprintf(jf, "  \"tps\": %.1f,\n", metrics.tps);
+            fprintf(jf, "  \"itl_p95_ms\": %.1f,\n", metrics.itl_p95_ms);
+            fprintf(jf, "  \"end_to_end_ms\": %.1f,\n", metrics.end_to_end_ms);
+            fprintf(jf, "  \"vram_mb\": %.0f\n", metrics.vram_used_mb);
+            fprintf(jf, "}\n");
+            fclose(jf);
+            printf("\nResults saved to %s\n", json_file);
+        }
         return 0;
     }
 
