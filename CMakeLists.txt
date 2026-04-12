@@ -132,6 +132,15 @@ target_include_directories(quant_kernels PUBLIC
 add_executable(int8_gemm_bench benchmarks/int8_gemm_bench.cu)
 target_link_libraries(int8_gemm_bench quant_kernels ${CUBLAS_LIB})
 
+# --- LayerNorm Kernels (Week 7) ---
+add_library(layernorm_kernels
+    kernels/layernorm/15_layernorm_residual.cu
+)
+target_include_directories(layernorm_kernels PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/kernels
+)
+
 # --- Dependencies ---
 include(FetchContent)
 
@@ -183,3 +192,7 @@ add_test(NAME DecodeAttentionTests COMMAND test_decode_attention)
 add_executable(test_int8_gemm tests/test_int8_gemm.cu)
 target_link_libraries(test_int8_gemm GTest::gtest_main quant_kernels gemm_kernels ${CUBLAS_LIB})
 add_test(NAME Int8GemmTests COMMAND test_int8_gemm)
+
+add_executable(test_layernorm tests/test_layernorm.cu)
+target_link_libraries(test_layernorm GTest::gtest_main layernorm_kernels)
+add_test(NAME LayerNormTests COMMAND test_layernorm)
