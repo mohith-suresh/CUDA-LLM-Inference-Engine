@@ -141,6 +141,24 @@ target_include_directories(layernorm_kernels PUBLIC
     ${CMAKE_SOURCE_DIR}/kernels
 )
 
+# --- GPT-2 Engine (Week 7) ---
+add_library(gpt2_engine
+    src/gpt2_engine.cu
+)
+target_include_directories(gpt2_engine PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/kernels
+    ${CMAKE_SOURCE_DIR}/src
+)
+target_link_libraries(gpt2_engine PUBLIC
+    quant_kernels
+    layernorm_kernels
+    decode_kernels
+    paged_attention_kernels
+    attention_kernels
+    softmax_kernels
+)
+
 # --- Dependencies ---
 include(FetchContent)
 
