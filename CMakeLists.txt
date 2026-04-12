@@ -141,6 +141,14 @@ target_include_directories(layernorm_kernels PUBLIC
     ${CMAKE_SOURCE_DIR}/kernels
 )
 
+# --- Tokenizer (Week 7) ---
+add_library(tokenizer
+    src/tokenizer.cpp
+)
+target_include_directories(tokenizer PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+)
+
 # --- GPT-2 Engine (Week 7) ---
 add_library(gpt2_engine
     src/gpt2_engine.cu
