@@ -149,6 +149,14 @@ target_include_directories(tokenizer PUBLIC
     ${CMAKE_SOURCE_DIR}/include
 )
 
+# --- Sampler (Week 7) ---
+add_library(sampler
+    src/sampler.cu
+)
+target_include_directories(sampler PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+)
+
 # --- GPT-2 Engine (Week 7) ---
 add_library(gpt2_engine
     src/gpt2_engine.cu
