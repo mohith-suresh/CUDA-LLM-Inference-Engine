@@ -169,4 +169,4 @@ INT8 GEMM using `__dp4a()` (dot product of 4-element int8 vectors accumulated in
 - [x] Week 4: FlashAttention-2
 - [x] Week 5: PagedAttention + GQA
 - [x] Week 6: Decode attention + INT8 GEMM
-- [ ] Week 7: GPT-2 inference demo
+- [x] Week 7: GPT-2 inference demo
