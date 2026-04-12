@@ -135,6 +135,7 @@ target_link_libraries(int8_gemm_bench quant_kernels ${CUBLAS_LIB})
 # --- LayerNorm Kernels (Week 7) ---
 add_library(layernorm_kernels
     kernels/layernorm/15_layernorm_residual.cu
+    kernels/layernorm/15_embed.cu
 )
 target_include_directories(layernorm_kernels PUBLIC
     ${CMAKE_SOURCE_DIR}/include
