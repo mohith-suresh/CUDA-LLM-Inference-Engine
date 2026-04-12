@@ -257,3 +257,8 @@ add_test(NAME Int8GemmTests COMMAND test_int8_gemm)
 add_executable(test_layernorm tests/test_layernorm.cu)
 target_link_libraries(test_layernorm GTest::gtest_main layernorm_kernels)
 add_test(NAME LayerNormTests COMMAND test_layernorm)
+
+add_executable(test_engine tests/test_engine.cu)
+target_include_directories(test_engine PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_engine GTest::gtest_main gpt2_engine tokenizer sampler)
+add_test(NAME EngineTests COMMAND test_engine)
