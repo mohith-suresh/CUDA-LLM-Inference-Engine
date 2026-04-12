@@ -193,6 +193,32 @@ endif()
 set(CUTLASS_DIR ${CUTLASS_DIR})
 message(STATUS "CUTLASS source: ${CUTLASS_DIR}")
 
+# FTXUI (TUI library)
+FetchContent_Declare(
+    ftxui
+    GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
+    GIT_TAG        v5.0.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(ftxui)
+
+# --- SLICK main executable (Week 7) ---
+add_executable(slick src/main.cu)
+target_include_directories(slick PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/kernels
+    ${CMAKE_SOURCE_DIR}/src
+)
+target_link_libraries(slick
+    gpt2_engine
+    tokenizer
+    sampler
+    ftxui::screen
+    ftxui::dom
+    ftxui::component
+    ${CUBLAS_LIB}
+)
+
 # --- Tests (Google Test) ---
 FetchContent_Declare(
     googletest
