@@ -14,6 +14,7 @@
 #include <cassert>
 #include <vector>
 #include <algorithm>
+#include <cmath>
 
 static float* load_bin_f32(const std::string& path, size_t count) {
     std::ifstream f(path, std::ios::binary);
@@ -130,6 +131,10 @@ void GPT2Engine::alloc_workspace() {
     CUDA_CHECK(cudaMalloc(&d_k_buf_, (size_t)L * d * sizeof(float)));
     CUDA_CHECK(cudaMalloc(&d_v_buf_, (size_t)L * d * sizeof(float)));
 
+    CUDA_CHECK(cudaMalloc(&d_q_split_, (size_t)L * d * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_k_split_, (size_t)L * d * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(&d_v_split_, (size_t)L * d * sizeof(float)));
+
     int max_rows = L;
     int max_cols = ff;
     CUDA_CHECK(cudaMalloc(&d_act_packed_, (size_t)max_rows * (max_cols / 4) * sizeof(int32_t)));
@@ -196,6 +201,7 @@ void GPT2Engine::free_all() {
     cudaFree(d_qkv_); cudaFree(d_attn_out_);
     cudaFree(d_ffn_hidden_); cudaFree(d_logits_);
     cudaFree(d_q_buf_); cudaFree(d_k_buf_); cudaFree(d_v_buf_);
+    cudaFree(d_q_split_); cudaFree(d_k_split_); cudaFree(d_v_split_);
     cudaFree(d_act_packed_); cudaFree(d_act_scale_);
     cudaFree(d_k_cache_); cudaFree(d_v_cache_);
     cudaFree(d_block_tables_); cudaFree(d_context_lens_);
@@ -277,6 +283,35 @@ static void transpose_hmd_to_mhd(const float* in, float* out, int M, int H, int 
     int block = 256;
     int grid = (total + block - 1) / block;
     transpose_hmd_to_mhd_kernel<<<grid, block>>>(in, out, M, H, d);
+}
+
+// ============================================================
+// QKV stripe deinterleave: [M, 3*d] -> Q[M,d], K[M,d], V[M,d]
+// HF c_attn packs Q||K||V along last dim per token.
+// ============================================================
+__global__ void qkv_split_kernel(
+    const float* __restrict__ qkv,  // [M, 3*d]
+    float* __restrict__ Q,
+    float* __restrict__ K,
+    float* __restrict__ V,
+    int M, int d)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = M * d;
+    if (idx >= total) return;
+    int m = idx / d;
+    int i = idx % d;
+    int src = m * 3 * d;
+    Q[m * d + i] = qkv[src + i];
+    K[m * d + i] = qkv[src + d + i];
+    V[m * d + i] = qkv[src + 2 * d + i];
+}
+
+static void run_qkv_split(const float* qkv, float* Q, float* K, float* V, int M, int d) {
+    int total = M * d;
+    int block = 256;
+    int grid = (total + block - 1) / block;
+    qkv_split_kernel<<<grid, block>>>(qkv, Q, K, V, M, d);
 }
 
 // ============================================================
@@ -429,12 +464,12 @@ void GPT2Engine::forward_layer(int layer, int seq_len, bool is_prefill) {
     run_int8_gemm_bias(M, 3 * d, d, d_act_packed_, lw.qkv.packed,
                        d_act_scale_, lw.qkv.scale, lw.qkv_bias, d_qkv_);
 
-    // Layout: d_qkv_ is [M, 3*d] = concat(Q[M,d], K[M,d], V[M,d]) in last-dim sections
-    // HF GPT-2 c_attn produces Q||K||V along last dim. After transpose for K14 NT layout,
-    // the output ordering is Q[:,0:d], K[:,d:2d], V[:,2d:3d] still holds along column split.
-    float* Q_mhd = d_qkv_;
-    float* K_mhd = d_qkv_ + (size_t)M * d;
-    float* V_mhd = d_qkv_ + (size_t)M * 2 * d;
+    // Layout: d_qkv_ is [M, 3*d] per-token stripe Q||K||V (HF c_attn).
+    // Deinterleave into separate [M, d] buffers for downstream use.
+    run_qkv_split(d_qkv_, d_q_split_, d_k_split_, d_v_split_, M, d);
+    float* Q_mhd = d_q_split_;
+    float* K_mhd = d_k_split_;
+    float* V_mhd = d_v_split_;
 
     // current start position
     int start_pos = current_pos_;
@@ -515,9 +550,10 @@ void GPT2Engine::forward_layer_cublas(int layer, int seq_len, bool is_prefill) {
                 &beta, d_qkv_, 3 * d);
     run_bias_add(d_qkv_, lw.qkv_bias, M, 3 * d);
 
-    float* Q_mhd = d_qkv_;
-    float* K_mhd = d_qkv_ + (size_t)M * d;
-    float* V_mhd = d_qkv_ + (size_t)M * 2 * d;
+    run_qkv_split(d_qkv_, d_q_split_, d_k_split_, d_v_split_, M, d);
+    float* Q_mhd = d_q_split_;
+    float* K_mhd = d_k_split_;
+    float* V_mhd = d_v_split_;
 
     int start_pos = current_pos_;
     kv_cache_append(layer, K_mhd, V_mhd, M, start_pos);

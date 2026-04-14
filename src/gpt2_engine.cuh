@@ -57,6 +57,11 @@ private:
     float* d_k_buf_;
     float* d_v_buf_;
 
+    // QKV stripe deinterleave output: [M, d] each
+    float* d_q_split_;
+    float* d_k_split_;
+    float* d_v_split_;
+
     InferenceBackend backend_;
     cublasHandle_t cublas_handle_;
     bool cublas_ready_;
