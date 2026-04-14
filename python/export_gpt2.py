@@ -168,15 +168,15 @@ def export_model(output_dir: str):
 
         print(f"Layer {i}: done")
 
-    vocab = tokenizer.encoder
-    with open(os.path.join(output_dir, "vocab.json"), "w") as f:
-        json.dump(vocab, f)
+    import shutil
+    from huggingface_hub import hf_hub_download
 
-    merges_path = os.path.join(output_dir, "merges.txt")
-    bpe_merges = list(tokenizer.bpe_ranks.keys())
-    with open(merges_path, "w") as f:
-        for pair in bpe_merges:
-            f.write(f"{pair[0]} {pair[1]}\n")
+    shutil.copy(
+        hf_hub_download("gpt2", "vocab.json"), os.path.join(output_dir, "vocab.json")
+    )
+    shutil.copy(
+        hf_hub_download("gpt2", "merges.txt"), os.path.join(output_dir, "merges.txt")
+    )
 
     print(f"\nExport complete: {output_dir}")
     total_bytes = sum(
