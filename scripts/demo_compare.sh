@@ -25,14 +25,14 @@ echo ""
 # 2. SLICK cuBLAS FP32 backend
 echo ">>> [2/3] SLICK cuBLAS FP32 backend"
 echo "--------------------------------------------------------"
-./build/slick --bench --greedy --backend cublas \
+./build/slick --bench --temperature 0.8 --top-k 40 --backend cublas \
     --model "$MODEL_DIR" --prompt "$PROMPT" --max-tokens "$MAX_TOKENS"
 echo ""
 
 # 3. SLICK INT8 (optimized kernels)
 echo ">>> [3/3] SLICK INT8 (optimized)"
 echo "--------------------------------------------------------"
-./build/slick --bench --greedy --backend int8 \
+./build/slick --bench --temperature 0.8 --top-k 40 --backend int8 \
     --model "$MODEL_DIR" --prompt "$PROMPT" --max-tokens "$MAX_TOKENS"
 echo ""
 

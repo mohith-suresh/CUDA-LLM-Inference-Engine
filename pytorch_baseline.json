@@ -1,0 +1,10 @@
+{
+  "backend": "pytorch_fp32",
+  "tokens": 64,
+  "ttft_ms": 486.3,
+  "tpot_ms": 27.5,
+  "tps": 36.3,
+  "itl_p95_ms": 36.8,
+  "end_to_end_ms": 1763.0,
+  "vram_mb": 1361.0
+}

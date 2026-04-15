@@ -619,13 +619,21 @@ void GPT2Engine::forward_logits(const float* x_last, float* out_logits) {
     run_vocab_proj(x_last, weights_.wte, out_logits, config_.d_model, config_.vocab_size);
 }
 
+void GPT2Engine::reset_session() {
+    blocks_allocated_ = 0;
+    current_pos_ = 0;
+    int zero = 0;
+    CUDA_CHECK(cudaMemcpy(d_context_lens_, &zero, sizeof(int), cudaMemcpyHostToDevice));
+}
+
 void GPT2Engine::generate(const std::vector<int>& prompt_tokens,
                            int max_new_tokens,
                            float temperature,
                            int top_k,
                            bool greedy,
                            std::function<void(int)> token_callback,
-                           InferenceMetrics& metrics) {
+                           InferenceMetrics& metrics,
+                           bool reset_kv) {
     int prompt_len = (int)prompt_tokens.size();
     int d = config_.d_model;
     int V = config_.vocab_size;
@@ -641,11 +649,7 @@ void GPT2Engine::generate(const std::vector<int>& prompt_tokens,
     CUDA_CHECK(cudaMemcpy(d_tokens, prompt_tokens.data(),
                           prompt_len * sizeof(int), cudaMemcpyHostToDevice));
 
-    // Reset KV cache state
-    blocks_allocated_ = 0;
-    current_pos_ = 0;
-    int zero = 0;
-    CUDA_CHECK(cudaMemcpy(d_context_lens_, &zero, sizeof(int), cudaMemcpyHostToDevice));
+    if (reset_kv) reset_session();
 
     // Scratch for single-token hidden state
     float* d_last_hidden;
@@ -658,20 +662,41 @@ void GPT2Engine::generate(const std::vector<int>& prompt_tokens,
     total_timer.tic();
     step_timer.tic();
 
-    ensure_kv_blocks(prompt_len);
-    embed(d_tokens, prompt_len, 0, d_x_);
+    if (current_pos_ == 0) {
+        // Fresh session: fused flash-attn prefill over all prompt tokens.
+        ensure_kv_blocks(prompt_len);
+        embed(d_tokens, prompt_len, 0, d_x_);
 
-    for (int l = 0; l < config_.n_layers; ++l) {
-        if (backend_ == InferenceBackend::CUBLAS_FP32)
-            forward_layer_cublas(l, prompt_len, /*is_prefill=*/true);
-        else
-            forward_layer(l, prompt_len, /*is_prefill=*/true);
+        for (int l = 0; l < config_.n_layers; ++l) {
+            if (backend_ == InferenceBackend::CUBLAS_FP32)
+                forward_layer_cublas(l, prompt_len, /*is_prefill=*/true);
+            else
+                forward_layer(l, prompt_len, /*is_prefill=*/true);
+        }
+
+        current_pos_ = prompt_len;
+        CUDA_CHECK(cudaMemcpy(d_context_lens_, &current_pos_, sizeof(int), cudaMemcpyHostToDevice));
+        forward_final_ln(prompt_len, d_last_hidden);
+    } else {
+        // Continuation: feed each new prompt token through decode path so it
+        // attends to the existing KV cache, growing the cache linearly.
+        for (int i = 0; i < prompt_len; ++i) {
+            ensure_kv_blocks(current_pos_ + 1);
+            CUDA_CHECK(cudaMemcpy(d_tokens, &prompt_tokens[i], sizeof(int),
+                                  cudaMemcpyHostToDevice));
+            embed(d_tokens, 1, current_pos_, d_x_);
+            for (int l = 0; l < config_.n_layers; ++l) {
+                if (backend_ == InferenceBackend::CUBLAS_FP32)
+                    forward_layer_cublas(l, 1, /*is_prefill=*/false);
+                else
+                    forward_layer(l, 1, /*is_prefill=*/false);
+            }
+            current_pos_++;
+            CUDA_CHECK(cudaMemcpy(d_context_lens_, &current_pos_, sizeof(int), cudaMemcpyHostToDevice));
+        }
+        forward_final_ln(1, d_last_hidden);
     }
 
-    current_pos_ = prompt_len;
-    CUDA_CHECK(cudaMemcpy(d_context_lens_, &current_pos_, sizeof(int), cudaMemcpyHostToDevice));
-
-    forward_final_ln(prompt_len, d_last_hidden);
     forward_logits(d_last_hidden, d_logits_);
     CUDA_CHECK(cudaDeviceSynchronize());
 

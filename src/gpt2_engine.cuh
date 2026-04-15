@@ -18,7 +18,13 @@ public:
                   int top_k,
                   bool greedy,
                   std::function<void(int token_id)> token_callback,
-                  InferenceMetrics& metrics);
+                  InferenceMetrics& metrics,
+                  bool reset_kv = true);
+
+    // Clear KV cache / session state. Call between independent conversations.
+    void reset_session();
+
+    int session_tokens() const { return current_pos_; }
 
     const GPT2Config& config() const { return config_; }
 
