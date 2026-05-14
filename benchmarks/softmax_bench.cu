@@ -134,7 +134,7 @@ int main() {
 
     CudnnSoftmax cudnn_softmax;
 
-    printf("SLICK Softmax Benchmark\n");
+    printf("Softmax Benchmark\n");
     printf("GPU: GTX 1650 Ti | CUDA 10.1 | FP32\n");
     printf("Peak Memory BW: %.0f GB/s\n", peak_bw);
     printf("========================================\n\n");

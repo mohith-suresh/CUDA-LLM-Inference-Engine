@@ -44,7 +44,7 @@ int main() {
     const int d = 64;
     const int block_size = 16;
 
-    printf("SLICK Decode Attention Benchmark\n");
+    printf("Decode Attention Benchmark\n");
     printf("GPU: GTX 1650 Ti | CUDA 11.8 | FP32\n");
     printf("Block size: %d | Head dim: %d\n", block_size, d);
     printf("================================================\n\n");

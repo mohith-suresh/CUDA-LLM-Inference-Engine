@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.18)
-project(SLICK LANGUAGES CXX CUDA)
+project(cuda_llm_inference LANGUAGES CXX CUDA)
 
 set(CMAKE_CUDA_ARCHITECTURES 75)
 set(CMAKE_CUDA_STANDARD 17)
@@ -203,14 +203,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(ftxui)
 
-# --- SLICK main executable (Week 7) ---
-add_executable(slick src/main.cpp)
-target_include_directories(slick PRIVATE
+# --- LLM inference executable (Week 7) ---
+add_executable(llm_infer src/main.cpp)
+target_include_directories(llm_infer PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/kernels
     ${CMAKE_SOURCE_DIR}/src
 )
-target_link_libraries(slick
+target_link_libraries(llm_infer
     gpt2_engine
     tokenizer
     sampler

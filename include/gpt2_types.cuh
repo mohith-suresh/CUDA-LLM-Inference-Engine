@@ -40,7 +40,7 @@ struct LayerWeights {
     float* ffn_down_bias;
 };
 
-enum class InferenceBackend { SLICK_INT8, CUBLAS_FP32 };
+enum class InferenceBackend { CUSTOM_INT8, CUBLAS_FP32 };
 
 struct FP32Weight {
     float* data;    // [K, N] row-major

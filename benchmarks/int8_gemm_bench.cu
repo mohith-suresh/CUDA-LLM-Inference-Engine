@@ -10,7 +10,7 @@
 #include "quantization/14_int8_gemm.cuh"
 
 int main() {
-    printf("SLICK INT8 GEMM (dp4a) Benchmark\n");
+    printf("INT8 GEMM (dp4a) Benchmark\n");
     printf("GPU: GTX 1650 Ti | CUDA 11.8 | INT8 dp4a\n");
     printf("Layout: NT (A row-major, B^T row-major, both int8x4 packed)\n");
     printf("Tile: BM=%d BN=%d BK=%d | Thread tile: TM=%d TN=%d\n",

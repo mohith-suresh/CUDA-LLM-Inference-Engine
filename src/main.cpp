@@ -210,7 +210,7 @@ static void run_pytorch(const std::string& prompt, int max_tokens,
     screen.Post(Event::Custom);
 }
 
-static void run_slick(int idx, const std::string& model_dir,
+static void run_inference(int idx, const std::string& model_dir,
                       InferenceBackend backend,
                       const std::string& prompt, int max_tokens,
                       State& st, ScreenInteractive& screen) {
@@ -246,8 +246,8 @@ static int run_compare_tui(const std::string& model_dir,
 
     State state;
     state.panes[0] = {"PyTorch FP32", "", {}, 0};
-    state.panes[1] = {"SLICK cuBLAS", "", {}, 0};
-    state.panes[2] = {"SLICK INT8",   "", {}, 0};
+    state.panes[1] = {"Custom cuBLAS", "", {}, 0};
+    state.panes[2] = {"Custom INT8",   "", {}, 0};
 
     auto screen = ScreenInteractive::Fullscreen();
     std::string input_text = initial_prompt;
@@ -263,9 +263,9 @@ static int run_compare_tui(const std::string& model_dir,
             }
         }
         run_pytorch(prompt, max_tokens, state, screen);
-        run_slick(1, model_dir, InferenceBackend::CUBLAS_FP32,
+        run_inference(1, model_dir, InferenceBackend::CUBLAS_FP32,
                   prompt, max_tokens, state, screen);
-        run_slick(2, model_dir, InferenceBackend::SLICK_INT8,
+        run_inference(2, model_dir, InferenceBackend::CUSTOM_INT8,
                   prompt, max_tokens, state, screen);
         state.running = false;
         screen.Post(Event::Custom);
@@ -303,7 +303,7 @@ static int run_compare_tui(const std::string& model_dir,
         }) | border;
 
         return vbox({
-            text(" SLICK — 3-Way Inference Race ") | bold | center,
+            text(" GPT-2 — 3-Way Inference Race ") | bold | center,
             main_area,
             speedup,
             input_bar,
@@ -323,7 +323,7 @@ int main(int argc, char** argv) {
     bool greedy = false;
     bool bench_mode = false;
     bool compare_mode = false;
-    InferenceBackend backend = InferenceBackend::SLICK_INT8;
+    InferenceBackend backend = InferenceBackend::CUSTOM_INT8;
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--model") == 0 && i + 1 < argc) model_dir = argv[++i];
@@ -337,7 +337,7 @@ int main(int argc, char** argv) {
         else if (strcmp(argv[i], "--backend") == 0 && i + 1 < argc) {
             ++i;
             if (strcmp(argv[i], "cublas") == 0) backend = InferenceBackend::CUBLAS_FP32;
-            else if (strcmp(argv[i], "int8") == 0) backend = InferenceBackend::SLICK_INT8;
+            else if (strcmp(argv[i], "int8") == 0) backend = InferenceBackend::CUSTOM_INT8;
         }
     }
 
@@ -349,7 +349,7 @@ int main(int argc, char** argv) {
     }
 
     const char* backend_name = (backend == InferenceBackend::CUBLAS_FP32)
-                                ? "cublas_fp32" : "slick_int8";
+                                ? "cublas_fp32" : "custom_int8";
     printf("Loading model from %s (backend=%s)...\n", model_dir.c_str(), backend_name);
     GPT2Engine engine(model_dir, backend);
     BPETokenizer tokenizer(model_dir);
@@ -369,7 +369,7 @@ int main(int argc, char** argv) {
                         }, metrics);
 
         printf("\n\n==================================================\n");
-        printf("SLICK %s\n", backend_name);
+        printf("Backend: %s\n", backend_name);
         printf("==================================================\n");
         printf("Tokens:       %d\n", metrics.tokens_generated);
         printf("TTFT:         %.1f ms\n", metrics.ttft_ms);
@@ -471,7 +471,7 @@ int main(int argc, char** argv) {
         }) | border;
 
         return vbox({
-            text(" SLICK GPT-2 Engine ") | bold | center,
+            text(" GPT-2 Inference Engine ") | bold | center,
             main_area,
             input_bar,
         });
