@@ -1,6 +1,39 @@
-# SLICK — Speedy LLM Inference CUDA Kernels
+# CUDA LLM Inference Kernels — From Scratch
 
-A from-scratch CUDA kernel library for LLM inference, targeting GTX 1650 Ti (CC 7.5, 4GB).
+> A hand-tuned CUDA kernel library and inference engine for LLMs, built from first principles — GEMM → FlashAttention-2 → PagedAttention → INT8 quantization → GPT-2 text generation on a consumer GTX 1650 Ti, plus an A10 SGEMM walkthrough that reaches cuBLAS-like throughput.
+
+**14 CUDA kernels · 90 GoogleTest cases · roofline-driven · SM75 + SM86 GEMM study**
+
+---
+
+## Headline results
+
+| Stage | Kernel | Result | Reference |
+|---|---|---|---|
+| GEMM | A10 SGEMM walkthrough | **96.5% of cuBLAS** at 4096³ (**12.8 TFLOP/s**, 10.8 ms) | cuBLAS SGEMM |
+| Softmax | K08 Fused online softmax | **166.3 GB/s** (86.6% peak BW), **1.50× cuDNN** | cuDNN 8.9.7 |
+| Attention | K10 FlashAttention-2 | **1.96× vs unfused cuBLAS+softmax** | cuBLAS SGEMM + K08 |
+| Paged KV cache | K11 PagedAttention | **1.28× vs K10** (B1 H8 N256 d64) | K10 FlashAttention-2 |
+| Decode | K13 Split-K decode | **6.11× vs K11** at ctx=1024 (N=1 query) | K11 PagedAttention |
+| INT8 | K14 dp4a GEMM | **2.28× vs cuBLAS FP32** at M=N=K=512 | cuBLAS SGEMM |
+
+## What this demonstrates
+
+- **Low-level CUDA** — warp shuffle reductions, float4 vectorized loads, 2D register tiling, double-buffered shared memory, bank-conflict avoidance, `__dp4a` integer ALU path
+- **Modern LLM inference techniques** — FlashAttention-2 fusion (Q@Kᵀ + softmax + P@V in one kernel), vLLM-style paged KV cache with block-table indirection, GQA via compile-time `GROUP_SIZE` templating, split-K decode attention for single-token generation
+- **Performance methodology** — roofline analysis, arithmetic-intensity reasoning, memory-traffic proofs, and profiler-driven ablations that isolate coalescing, reuse, and occupancy effects
+- **Numerical rigor** — every kernel validated against cuBLAS / cuDNN / CPU references with 1e-4 to 1e-7 tolerances across 90 GoogleTest cases (6 suites)
+- **End-to-end systems work** — BPE tokenizer, sampler, per-row symmetric quantizer, and a working GPT-2 Small (124M) inference engine built on the kernel stack
+
+## Hardware targets
+
+Primary LLM kernel stack: GTX 1650 Ti (Turing, **SM75**) — 1024 CUDA cores @ 2100 MHz, 192 GB/s memory bandwidth, 4 GB VRAM, **no Tensor Cores**. Peak FP32 = 4300 GFLOPS. Roofline ridge point = 22.4 FLOP/byte.
+
+SGEMM optimization walkthrough: NVIDIA A10 (Ampere, **SM86**) at 4096³, validated against cuBLAS. This isolates pure FP32 CUDA-core GEMM optimization on newer hardware while keeping the LLM inference engine numbers on the original SM75 target.
+
+Working without Tensor Cores in the LLM stack forced every speedup to come from algorithmic and memory-system insight — fusion, online algorithms, traffic reduction, register tiling — rather than from hardware acceleration. The methodology transfers directly to Hopper/Ada/Blackwell, where the same fusion patterns apply on top of `wgmma`/TMA.
+
+---
 
 ## Build
 
@@ -9,20 +42,28 @@ cmake -B build -DCMAKE_CUDA_ARCHITECTURES=75
 cmake --build build
 ```
 
-## Run
+## Run benchmarks
 
 ```bash
-./build/gemm_bench              # GEMM kernel benchmark
-./build/softmax_bench           # Softmax kernel benchmark
-./build/attention_bench         # FlashAttention-2 benchmark
-./build/paged_attention_bench   # PagedAttention + GQA benchmark
-./build/decode_attention_bench  # Decode attention benchmark
-./build/int8_gemm_bench         # INT8 GEMM benchmark
+./build/gemm_bench              # 7 GEMM variants vs cuBLAS
+./build/softmax_bench           # online softmax vs cuDNN
+./build/attention_bench         # FlashAttention-2 vs unfused baseline
+./build/paged_attention_bench   # PagedAttention + GQA
+./build/decode_attention_bench  # split-K decode for N=1 query
+./build/int8_gemm_bench         # INT8 dp4a vs FP32 cuBLAS
+./build/llm_infer               # GPT-2 inference (TUI / --bench / --compare)
 ```
 
-## Test
+Run the A10 SGEMM walkthrough:
 
-Google Test (v1.14.0, fetched via CMake FetchContent). 90 test cases across 6 suites:
+```bash
+cd gemm_walkthrough
+make ARCH=sm_86 run
+```
+
+## Tests
+
+Google Test (v1.14.0, fetched via CMake `FetchContent`). 90 cases across 6 suites:
 
 ```bash
 ctest --test-dir build --output-on-failure
@@ -39,21 +80,27 @@ ctest --test-dir build --output-on-failure
 
 Run a single suite: `./build/test_gemm`, `./build/test_softmax`, `./build/test_attention`, `./build/test_paged_attention`, `./build/test_decode_attention`, `./build/test_int8_gemm`
 
-## GEMM Kernels
+---
 
-| # | Kernel | Technique | GFLOPS (2048) | AI (FLOP/byte) | Bound |
-|---|--------|-----------|--------------|-----------------|-------|
-| 01 | Naive | 1 thread = 1 output element | 30 | 0.25 | Memory |
-| 02 | Coalesced | threadIdx.x → col for coalesced reads | 351 | 0.25 | Memory |
-| 03 | Shared Tiling | 32×32 shared memory tiles | 469 | 8.0 | Memory |
-| 04 | 1D Reg Tiling | TM=8, register accumulation | 1094 | 16.0 | Memory |
-| 05 | 2D Reg Tiling | TM=TN=8, 8×8 outer product | 1210 | 32.0 | Compute |
-| 06 | Vectorized | float4 loads + transposed A in smem | 1689 | 32.0 | Compute |
-| 07 | Double Buffered | 2× smem buffers, overlap load+compute | 1713 | 32.0 | Compute |
+## GEMM — A10 SGEMM walkthrough
 
-Roofline: Peak FP32 = 4300 GFLOPS (1024 cores @ 2100 MHz) | Peak BW = 192 GB/s | Ridge = 22.4 FLOP/byte
+Row-major FP32 GEMM: `C = alpha * (A @ B) + beta * C`, validated against cuBLAS with `alpha=1`, `beta=0.5`, and a random initial `C`. Timing uses the standard `alpha=1`, `beta=0` path at 4096³ on an NVIDIA A10. The full walkthrough lives in [`gemm_walkthrough/`](gemm_walkthrough/).
 
-## Softmax Kernels
+| Step | Kernel | Main idea | GFLOP/s | vs cuBLAS | Time |
+|---|---|---|---:|---:|---:|
+| 1 | Naive | one thread per output, uncoalesced access | 233.8 | 1.8% | 587.9 ms |
+| 2 | Coalesced | remap `threadIdx.x` to contiguous columns | 1,445.9 | 10.9% | 95.1 ms |
+| 3 | Shared memory | stage A/B tiles once per block | 2,032.5 | 15.4% | 67.6 ms |
+| 4 | 1D block tiling | reuse one B load across multiple A rows | 5,280.4 | 39.9% | 26.0 ms |
+| 5 | 2D block tiling | outer-product register micro-tile | 8,363.1 | 63.2% | 16.4 ms |
+| 6 | Vectorized | `float4` loads + transposed A in shared memory | 11,675.9 | 88.2% | 11.8 ms |
+| 10 | Warptiling | block → warp → thread tiling hierarchy | 12,695.0 | 95.9% | 10.8 ms |
+| 10h+ | Split round-robin | 16×8 reuse + `__launch_bounds__(128,3)` | 12,775.2 | **96.5%** | **10.8 ms** |
+| 0 | cuBLAS SGEMM | reference | 13,238.6 | 100.0% | 10.4 ms |
+
+The important result is not just the final number; it is the decomposition. Coalesced stores are a thread-to-column mapping issue, not a store-width issue. A square-ish 16×8 register tile cuts shared loads per K step from 36 to 24 versus a 32×4 strip. Finally, `__launch_bounds__(128,3)` moves the kernel below the A10 register cliff (193 → 168 registers/thread, 0 spills), raising occupancy from 2 to 3 blocks/SM. Together those effects bring the custom CUDA GEMM to **96.5% of cuBLAS** without Tensor Cores.
+
+## Online softmax (K08–K09)
 
 | # | Kernel | Technique | GB/s (512×4096) | %BW | vs cuDNN |
 |---|--------|-----------|-----------------|-----|----------|
@@ -61,31 +108,31 @@ Roofline: Peak FP32 = 4300 GFLOPS (1024 cores @ 2100 MHz) | Peak BW = 192 GB/s |
 | 09 | Warp Reduce | Online algorithm, `__shfl_down_sync` reduction | 160.4 | 83.5% | **1.39×** |
 | — | cuDNN 8.9.7 | `cudnnSoftmaxForward` (reference) | 148.0 | 77.1% | 1.00× |
 
-Row-wise softmax using the online algorithm (Milakov & Gimelshein 2018). AI = 2.6 FLOP/byte — **deeply memory-bound** (8.7× below ridge point), so the only optimization lever is reducing DRAM traffic.
+Row-wise softmax via the online algorithm (Milakov & Gimelshein, 2018). Arithmetic intensity = 2.6 FLOP/byte — **deeply memory-bound**, 8.7× below the ridge point — so the only optimization lever is reducing DRAM traffic.
 
-**Why we beat cuDNN:** The online algorithm reads input **twice** (12 bytes/elem: accumulate pass + normalize pass), while cuDNN's 3-pass approach reads it **three times** (16 bytes/elem: find max, exp+sum, normalize). That 25% traffic reduction is the entire margin.
+**Why we beat cuDNN:** the online algorithm reads the input **twice** (12 bytes/elem: accumulate pass + normalize pass), while cuDNN's 3-pass approach reads it **three times** (16 bytes/elem: find max, exp+sum, normalize). That 25% traffic reduction is the entire margin.
 
-The online `(max, sum_exp)` merge primitive feeds directly into FlashAttention (Week 4).
+The online `(max, sum_exp)` merge primitive feeds directly into FlashAttention (K10) and the split-K decode merge (K13).
 
-## FlashAttention-2
+## FlashAttention-2 (K10)
 
 | # | Kernel | Technique | Config | Time (μs) | TFLOPS | vs Unfused |
 |---|--------|-----------|--------|-----------|--------|------------|
-| 10 | FlashAttention-2 | Fused QK^T + softmax + PV, online rescaling | B1 H12 N1024 d64 | 2744 | 1.17 | **1.32×** |
-| 10 | FlashAttention-2 | Fused QK^T + softmax + PV, online rescaling | B4 H12 N512 d64 | 2047 | 1.57 | **1.96×** |
-| — | Unfused baseline | cuBLAS SGEMM + Kernel 08 softmax + cuBLAS SGEMM | B1 H12 N1024 d64 | 3623 | 0.89 | 1.00× |
+| 10 | FlashAttention-2 | Fused QKᵀ + softmax + PV, online rescaling | B1 H12 N1024 d64 | 2744 | 1.17 | **1.32×** |
+| 10 | FlashAttention-2 | Fused QKᵀ + softmax + PV, online rescaling | B4 H12 N512 d64 | 2047 | 1.57 | **1.96×** |
+| — | Unfused baseline | cuBLAS SGEMM + K08 softmax + cuBLAS SGEMM | B1 H12 N1024 d64 | 3623 | 0.89 | 1.00× |
 
-Single kernel fusing the entire multi-head attention: Q@K^T scoring, online softmax with warp shuffle reductions, and P@V output accumulation. The full N×N attention matrix never materializes in HBM — only a Br×Bc (64×32) tile exists transiently in shared memory/registers.
+A single kernel fusing multi-head attention end-to-end: Q@Kᵀ scoring, online softmax with warp-shuffle reductions, and P@V output accumulation. The full N×N attention matrix never materializes in HBM — only a Bᵣ×B꜀ (64×32) tile exists transiently in shared memory and registers.
 
-**Key design choices:**
-- **Q-outer, KV-inner loop** with asymmetric tiling (Br=64, Bc=32) to balance Q reuse vs register pressure on SM75
+**Design choices:**
+- **Q-outer, KV-inner loop** with asymmetric tiling (Bᵣ=64, B꜀=32) to balance Q reuse vs register pressure on SM75
 - **Half-warp shuffle reductions** for row-wise softmax — 16 lanes reduce with `__shfl_down_sync`, no shared memory needed for reductions
-- **Template causal mask** eliminates runtime branches; tile-level skip gives ~50% compute reduction
-- **Online softmax rescaling** using the same `(max, sum_exp)` merge primitive from Kernel 08
+- **Templated causal mask** eliminates runtime branches; tile-level skip gives ~50% compute reduction
+- **Online softmax rescaling** using the same `(max, sum_exp)` merge primitive from K08
 
 Validation: max |error| < 2.4e-7 across all 6 test configs (B=1–2, N=128–1024, causal + non-causal).
 
-## PagedAttention
+## PagedAttention (K11)
 
 | # | Kernel | Config | K10 (μs) | K11 (μs) | vs K10 | TFLOPS |
 |---|--------|--------|----------|----------|--------|--------|
@@ -95,18 +142,18 @@ Validation: max |error| < 2.4e-7 across all 6 test configs (B=1–2, N=128–102
 | 11 | PagedAttention | B1 H12 N512 d64 | 774.6 | 649.8 | **1.19×** | 1.24 |
 | 11 | PagedAttention | B2 H8 N256 d64 | 215.2 | 253.7 | 0.85× | 1.06 |
 
-Single kernel implementing vLLM-style paged KV cache with block table indirection (block_size=16). Reuses the same fused Q@K^T + online softmax + P@V pipeline from FlashAttention (Kernel 10), with KV fetched from non-contiguous physical blocks via a per-sequence block table.
+vLLM-style paged KV cache with block-table indirection (`block_size=16`). Reuses the same fused Q@Kᵀ + online softmax + P@V pipeline from K10, with KV fetched from non-contiguous physical blocks via a per-sequence block table.
 
-**Key design choices:**
-- **Unified template kernel** for both MHA (K11, GROUP_SIZE=1) and GQA (K12, GROUP_SIZE>1) — `kv_head = q_head / GROUP_SIZE`
-- **Asymmetric tiling** Br=64, Bc=16 (=block_size): each inner-loop step processes exactly one physical page, avoiding cross-block scatter
+**Design choices:**
+- **Unified template kernel** for both MHA (K11, `GROUP_SIZE=1`) and GQA (K12, `GROUP_SIZE>1`) — `kv_head = q_head / GROUP_SIZE`
+- **Asymmetric tiling** Bᵣ=64, B꜀=16 (= `block_size`): each inner-loop step processes exactly one physical page, avoiding cross-block scatter
 - **float4 vectorized loads** for Q, K, V cache and O output — 4× fewer global memory transactions
-- **Half-warp shuffle softmax** (16 lanes) matches the Bc=16 tile width — no shared memory needed for reductions
-- **Online rescaling** with the same `(max, sum_exp)` merge primitive from Kernels 08/10
+- **Half-warp shuffle softmax** (16 lanes) matches the B꜀=16 tile width — no shared memory needed for reductions
+- **Online rescaling** with the same `(max, sum_exp)` merge primitive from K08/K10
 
-K11 is 5–28% faster than K10 for single-batch configs (Bc=16 yields finer causal skip granularity + float4 vectorized paged cache loads), but shows 15% regression at B=2 due to block table indirection pressure with more grid blocks.
+K11 is 5–28% faster than K10 for single-batch configs (B꜀=16 yields finer causal-skip granularity + float4-vectorized paged cache loads), and shows a 15% regression at B=2 from block-table indirection pressure with more grid blocks — a clean illustration of the throughput/latency trade-off at small batch sizes.
 
-## GQA (Grouped-Query Attention)
+## GQA — Grouped-Query Attention (K12)
 
 | # | Kernel | H_q | H_kv | Group | N | Time (μs) | TFLOPS | KV Savings |
 |---|--------|-----|------|-------|---|-----------|--------|------------|
@@ -117,11 +164,11 @@ K11 is 5–28% faster than K10 for single-batch configs (Bc=16 yields finer caus
 | 12 | GQA PagedAttn | 32 | 4 | 8 | 256 | 429.7 | 1.25 | 8× |
 | 12 | GQA PagedAttn | 32 | 4 | 8 | 512 | 1498.5 | 1.43 | 8× |
 
-Kernel 12 dispatches the same paged attention template with compile-time GROUP_SIZE={1,2,4,8}. Multiple Q heads index the same KV head via `kv_head = q_head / GROUP_SIZE`, reducing KV cache memory proportionally while maintaining identical compute per Q head.
+K12 dispatches the same paged attention template with compile-time `GROUP_SIZE ∈ {1, 2, 4, 8}`. Multiple Q heads index the same KV head via `kv_head = q_head / GROUP_SIZE`, cutting KV cache memory proportionally while maintaining identical compute per Q head.
 
-**GQA scaling:** GROUP_SIZE 1→8 gives ~5% latency reduction at fixed H_q=8 (from L2 cache reuse of shared KV blocks) while cutting KV memory by 8×. At H_q=32 N=512, the kernel reaches 1.43 TFLOPS (33% of peak FP32).
+**Scaling:** `GROUP_SIZE` 1→8 gives ~5% latency reduction at fixed H_q=8 (from L2 cache reuse of shared KV blocks) while cutting KV memory by 8×. At H_q=32, N=512, the kernel reaches **1.43 TFLOPS** (33% of FP32 peak).
 
-## Decode Attention
+## Decode attention (K13)
 
 | # | Kernel | Config | K11 (μs) | K13 (μs) | Speedup |
 |---|--------|--------|----------|----------|---------|
@@ -134,15 +181,15 @@ Kernel 12 dispatches the same paged attention template with compile-time GROUP_S
 | 13 | Decode Attn (GQA) | B1 H16/4 ctx256 d64 | 94.2 | 34.9 | **2.70×** |
 | 13 | Decode Attn (GQA) | B1 H32/8 ctx512 d64 | 340.9 | 81.5 | **4.18×** |
 
-Split-K decode attention optimized for single-token generation (N=1 query). The key insight: K11's tiled approach (Br=64) wastes 63/64 rows when N=1. K13 instead parallelizes across the KV sequence dimension, splitting it into chunks processed by independent threadblocks.
+Split-K decode attention optimized for single-token generation (N=1 query). The key insight: K11's tiled approach (Bᵣ=64) wastes 63/64 rows when N=1. K13 instead parallelizes across the KV sequence dimension, splitting it into chunks processed by independent threadblocks.
 
 **Two-pass architecture:**
-- **Pass 1:** Each threadblock computes partial attention over its KV chunk using online softmax. 8 warps within a block process KV tokens in parallel, each warp computing the full dot product across d=64 via lane-cooperative reduction. Outputs partial `(o, m, l)` per split to workspace.
-- **Pass 2:** Single threadblock per (batch, head) merges all splits using online softmax correction: `o_merged = o_a × e^(m_a − m_new) + o_b × e^(m_b − m_new)`, then normalizes by merged `l`.
+- **Pass 1** — each threadblock computes partial attention over its KV chunk using online softmax. 8 warps within a block process KV tokens in parallel, each warp computing the full dot product across d=64 via lane-cooperative reduction. Outputs partial `(o, m, l)` per split to workspace.
+- **Pass 2** — a single threadblock per `(batch, head)` merges all splits using online-softmax correction: `o_merged = o_a · e^(m_a − m_new) + o_b · e^(m_b − m_new)`, then normalizes by merged `l`.
 
-**Split heuristic:** `num_splits = clamp(num_kv_blocks / 4, 1, 16)` — scales parallelism with context length, explaining the growing speedup from 1.3× at ctx=128 to 6.1× at ctx=1024.
+**Split heuristic:** `num_splits = clamp(num_kv_blocks / 4, 1, 16)` — parallelism scales with context length, which explains the growing speedup from 1.31× at ctx=128 to **6.11×** at ctx=1024.
 
-## INT8 GEMM
+## INT8 GEMM (K14)
 
 | # | Kernel | Size | K14 (μs) | FP32 cuBLAS (μs) | K14 GOPS | INT8/FP32 |
 |---|--------|------|----------|-------------------|----------|-----------|
@@ -151,22 +198,24 @@ Split-K decode attention optimized for single-token generation (N=1 query). The 
 | 14 | INT8 dp4a | 1024 | 788.3 | 963.2 | 2724 | **1.22×** |
 | 14 | INT8 dp4a | 2048 | 5213.2 | 6619.3 | 3296 | **1.27×** |
 
-INT8 GEMM using `__dp4a()` (dot product of 4-element int8 vectors accumulated into int32), the Turing SM75 integer ALU path. Paired with a separate per-row symmetric quantization kernel.
+INT8 GEMM using `__dp4a()` (dot product of 4-element int8 vectors accumulated into int32) — the Turing SM75 integer ALU path. Paired with a separate per-row symmetric quantization kernel.
 
-**NT layout rationale:** Both A `[M, K/4]` and B^T `[N, K/4]` stored row-major with K-dimension contiguous. This ensures coalesced global loads for both operands and natural alignment for dp4a's packed int8x4 format. The alternative (B in column-major) would require strided K-dimension access, breaking coalescing.
+**NT layout rationale:** both A `[M, K/4]` and Bᵀ `[N, K/4]` are stored row-major with the K-dimension contiguous. This ensures coalesced global loads for both operands and natural alignment with dp4a's packed `int8×4` format. The alternative (B in column-major) would require strided K-dimension access, breaking coalescing.
 
-**Quantization:** Per-row symmetric — `scale = max(|row|) / 127`. Phase 1: cooperative max-abs reduction via shared memory tree. Phase 2: quantize and pack 4 int8s into int32 for dp4a consumption. One block per row, separate kernel from GEMM.
+**Quantization:** per-row symmetric — `scale = max(|row|) / 127`. Phase 1: cooperative max-abs reduction via shared-memory tree. Phase 2: quantize and pack 4 int8s into int32 for dp4a consumption. One block per row, separate kernel from GEMM.
 
-**Tiling:** BM=BN=64, BK=16 (int8 elements = 4 packed int32), TM=TN=4 register tile. Each thread accumulates a 4×4 block of int32 accumulators. Epilogue dequantizes: `C_fp32[i][j] = C_int32[i][j] × scale_A[i] × scale_B[j]`.
+**Tiling:** BM=BN=64, BK=16 (int8 elements = 4 packed int32), TM=TN=4 register tile. Each thread accumulates a 4×4 block of int32 accumulators. Epilogue dequantizes: `C_fp32[i][j] = C_int32[i][j] · scale_A[i] · scale_B[j]`.
 
-**Note:** cuBLAS `cublasGemmEx` with `CUBLAS_COMPUTE_32I` is not supported on GTX 1650 Ti, so we compare against cuBLAS FP32 SGEMM. K14 achieves 1.2–2.3× speedup over FP32, reaching 3.3 TOPS peak INT8 throughput.
+**Note on the baseline:** cuBLAS `cublasGemmEx` with `CUBLAS_COMPUTE_32I` is not supported on GTX 1650 Ti, so the comparison is against cuBLAS FP32 SGEMM. K14 achieves 1.2–2.3× speedup over FP32 and reaches **3.3 TOPS** peak INT8 throughput.
+
+---
 
 ## Roadmap
 
-- [x] Week 1: Naive → Coalesced → Shared Tiling GEMM
-- [x] Week 2: Register tiling, vectorized loads, double buffering + roofline analysis
-- [x] Week 3: Online softmax (fused + warp reduce)
-- [x] Week 4: FlashAttention-2
-- [x] Week 5: PagedAttention + GQA
-- [x] Week 6: Decode attention + INT8 GEMM
-- [x] Week 7: GPT-2 inference demo
+- [x] Week 1 — Naive → Coalesced → Shared Tiling GEMM
+- [x] Week 2 — Register tiling, vectorized loads, double buffering + roofline analysis
+- [x] Week 3 — Online softmax (fused + warp reduce)
+- [x] Week 4 — FlashAttention-2
+- [x] Week 5 — PagedAttention + GQA
+- [x] Week 6 — Decode attention + INT8 GEMM
+- [x] Week 7 — GPT-2 inference engine (tokenizer, sampler, INT8 quantizer, TUI)

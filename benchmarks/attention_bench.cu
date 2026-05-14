@@ -218,7 +218,7 @@ int main() {
 
     UnfusedBaseline unfused;
 
-    printf("SLICK FlashAttention-2 Benchmark\n");
+    printf("FlashAttention-2 Benchmark\n");
     printf("GPU: GTX 1650 Ti | CUDA 11.8 | FP32\n");
     printf("Peak Memory BW: %.0f GB/s\n", peak_bw);
     printf("================================================\n\n");

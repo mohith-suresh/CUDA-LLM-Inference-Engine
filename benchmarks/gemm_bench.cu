@@ -40,7 +40,7 @@ int main() {
 
     CublasValidator validator;
 
-    printf("SLICK GEMM Benchmark\n");
+    printf("GEMM Benchmark\n");
     printf("GPU: GTX 1650 Ti | CUDA 10.1 | FP32\n");
     printf("========================================\n\n");
 

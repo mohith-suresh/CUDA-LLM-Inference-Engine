@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export GPT-2 Small weights to INT8-quantized binary files for SLICK inference."""
+"""Export GPT-2 Small weights to INT8-quantized binary files for the CUDA inference engine."""
 
 import argparse
 import json

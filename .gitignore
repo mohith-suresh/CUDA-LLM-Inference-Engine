@@ -35,3 +35,8 @@ __pycache__/
 
 # Exported model weights
 models/
+
+# GEMM walkthrough profiling artifacts
+gemm_walkthrough/prof/
+gemm_walkthrough/interview/
+gemm_walkthrough/viz/

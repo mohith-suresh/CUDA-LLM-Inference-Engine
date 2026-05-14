@@ -1,4 +1,4 @@
-# SLICK — Speedy LLM Inference CUDA Kernels
+# CUDA LLM Inference Kernels — From Scratch
 
 ## Build
 cmake -B build -DCMAKE_CUDA_COMPILER=/usr/local/cuda-11.8/bin/nvcc -DCMAKE_CUDA_ARCHITECTURES=75 && cmake --build build

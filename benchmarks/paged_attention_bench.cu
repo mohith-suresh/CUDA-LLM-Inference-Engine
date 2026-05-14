@@ -47,7 +47,7 @@ int main() {
     const int block_size = 16;
     const float peak_bw = 192.0f;
 
-    printf("SLICK PagedAttention + GQA Benchmark\n");
+    printf("PagedAttention + GQA Benchmark\n");
     printf("GPU: GTX 1650 Ti | CUDA 11.8 | FP32\n");
     printf("Block size: %d | Head dim: %d\n", block_size, d);
     printf("================================================\n\n");

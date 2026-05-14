@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark HuggingFace GPT-2 inference on GPU — baseline for SLICK comparison."""
+"""Benchmark HuggingFace GPT-2 inference on GPU — baseline for the custom CUDA engine."""
 
 import argparse
 import json

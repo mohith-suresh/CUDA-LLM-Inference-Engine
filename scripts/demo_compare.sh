@@ -1,6 +1,6 @@
 #!/bin/bash
 # Three-way GPT-2 inference comparison:
-#   PyTorch FP32 baseline  vs  SLICK cuBLAS FP32  vs  SLICK INT8
+#   PyTorch FP32 baseline  vs  Custom cuBLAS FP32  vs  Custom INT8 (this project's kernels)
 set -e
 
 PROMPT="${1:-The meaning of life is}"
@@ -8,7 +8,7 @@ MAX_TOKENS="${2:-64}"
 MODEL_DIR="${3:-models/gpt2-int8}"
 
 echo "========================================================"
-echo " SLICK — Three-Way Inference Comparison"
+echo " GPT-2 — Three-Way Inference Comparison"
 echo " Prompt: \"$PROMPT\""
 echo " Max tokens: $MAX_TOKENS"
 echo " Hardware: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'unknown')"
@@ -22,17 +22,17 @@ uv run python python/benchmark_pytorch.py \
     --prompt "$PROMPT" --max-tokens "$MAX_TOKENS"
 echo ""
 
-# 2. SLICK cuBLAS FP32 backend
-echo ">>> [2/3] SLICK cuBLAS FP32 backend"
+# 2. Custom cuBLAS FP32 backend
+echo ">>> [2/3] Custom cuBLAS FP32 backend"
 echo "--------------------------------------------------------"
-./build/slick --bench --temperature 0.8 --top-k 40 --backend cublas \
+./build/llm_infer --bench --temperature 0.8 --top-k 40 --backend cublas \
     --model "$MODEL_DIR" --prompt "$PROMPT" --max-tokens "$MAX_TOKENS"
 echo ""
 
-# 3. SLICK INT8 (optimized kernels)
-echo ">>> [3/3] SLICK INT8 (optimized)"
+# 3. Custom INT8 (optimized kernels)
+echo ">>> [3/3] Custom INT8 (optimized kernels)"
 echo "--------------------------------------------------------"
-./build/slick --bench --temperature 0.8 --top-k 40 --backend int8 \
+./build/llm_infer --bench --temperature 0.8 --top-k 40 --backend int8 \
     --model "$MODEL_DIR" --prompt "$PROMPT" --max-tokens "$MAX_TOKENS"
 echo ""
 
@@ -43,7 +43,7 @@ echo "========================================================"
 python3 - <<'PYEOF'
 import json, os
 
-files = ['pytorch_baseline.json', 'cublas_fp32_results.json', 'slick_int8_results.json']
+files = ['pytorch_baseline.json', 'cublas_fp32_results.json', 'custom_int8_results.json']
 backends = []
 for f in files:
     if os.path.exists(f):
@@ -88,4 +88,4 @@ if len(backends) >= 2 and backends[0].get('backend') == 'pytorch_fp32':
 PYEOF
 
 # Cleanup
-rm -f pytorch_baseline.json cublas_fp32_results.json slick_int8_results.json
+rm -f pytorch_baseline.json cublas_fp32_results.json custom_int8_results.json

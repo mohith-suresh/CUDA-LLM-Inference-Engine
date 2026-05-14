@@ -9,7 +9,7 @@
 class GPT2Engine {
 public:
     GPT2Engine(const std::string& model_dir,
-               InferenceBackend backend = InferenceBackend::SLICK_INT8);
+               InferenceBackend backend = InferenceBackend::CUSTOM_INT8);
     ~GPT2Engine();
 
     void generate(const std::vector<int>& prompt_tokens,
